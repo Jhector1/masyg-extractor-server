@@ -84,84 +84,99 @@ def signup():
 
 # Reference to Firebase database
 # ref = db.reference('users')
-
 @user.route('/user/login', methods=['POST'])
 def login():
+    """Handle user login with email/password or Google ID token."""
     data = request.json
     email = data.get('email', '').lower().strip()
     password = data.get('password')
-    google_id_token = data.get('googleIdToken')  # Token from Google login
+    google_id_token = data.get('googleIdToken')
 
     if not email and not google_id_token:
         return jsonify({'message': 'Missing credentials'}), 400
 
-    if google_id_token:
-        try:
-            # Verify the Google ID token
-            decoded_token = firebase_auth.verify_id_token(google_id_token)
-            google_email = decoded_token.get('email')
-            username = decoded_token.get('name', 'Google User')  # Default name
-            firebase_uid = decoded_token.get('sub')  # Firebase UID from 'sub'
-
-            # Check if the user exists in Firebase
-            users = ref.get()  # Assuming ref points to Firebase Realtime Database
-            user_found = None
-
-            if users:
-                for user_id_key, user_data in users.items():
-                    if user_data['email'] == google_email:
-                        user_found = {**user_data, 'userId': user_id_key}
-                        break
-
-            if not user_found:
-                # Create new user if not found
-                new_user = {
-                    'email': google_email,
-                    'username': username,
-                    'password': generate_password_hash(uuid.uuid4().hex,  method='pbkdf2:sha256'),  # Random password
-                    'isSubscribed': False,
-                    'hasUsedTrial': False,
-                }
-                new_user_ref = ref.push(new_user)
-                user_id = new_user_ref.key
-                user_found = {**new_user, 'userId': user_id}
-
-            # Store user session
-            session['user'] = {
-                'userId': user_found['userId'],
-                'username': user_found['username'],
-                'email': user_found['email'],
-                'isSubscribed': user_found['isSubscribed'],
-            }
-            return jsonify({'message': 'Google login successful', 'user': session['user']}), 200
-
-        except Exception as e:
-            print(f"Error verifying Google ID token: {e}")
-            return jsonify({'message': 'Invalid Google ID token'}), 400
-    elif email and password:
-        # Handle password-based login
-        users = ref.get()
-        if not users:
-            return jsonify({'message': 'Invalid email or password'}), 400
-
-        for user_id, user_data in users.items():
-            if user_data['email'] == email:
-                if check_password_hash(user_data['password'], password):
-                    # Store user info in the session
-                    session['user'] = {
-                        'userId': user_id,
-                        'username': user_data['username'],
-                        'email': user_data['email'],
-                        'isSubscribed': user_data['isSubscribed']
-                    }
-                    print("Session content:", session)
-                    return jsonify({'message': 'Login successful', 'user': session['user']}), 200
-                else:
-                    return jsonify({'message': 'Invalid email or password'}), 400
-
-        return jsonify({'message': 'Invalid email or password'}), 400
+    try:
+        if google_id_token:
+            return handle_google_login(google_id_token)
+        elif email and password:
+            return handle_password_login(email, password)
+    except Exception as e:
+        print(f"Error during login: {e}")
+        return jsonify({'message': 'An error occurred during login'}), 500
 
     return jsonify({'message': 'Invalid request'}), 400
+
+def handle_google_login(google_id_token):
+    """Handle Google login."""
+    try:
+        decoded_token = firebase_auth.verify_id_token(google_id_token)
+        google_email = decoded_token.get('email')
+        username = decoded_token.get('name', 'Google User')
+        firebase_uid = decoded_token.get('sub')  # Firebase UID
+
+        # Query user by email
+        users = ref.order_by_child('email').equal_to(google_email).get()
+        user_found = None
+
+        if users:
+            # Extract user data and include Firebase key as userId
+            for user_id_key, user_data in users.items():
+                user_found = {**user_data, 'userId': user_id_key}
+                break
+
+        if not user_found:
+            # Create new user if not found
+            new_user = {
+                'email': google_email,
+                'username': username,
+                'password': generate_password_hash(uuid.uuid4().hex, method='pbkdf2:sha256'),
+                'isSubscribed': False,
+                'hasUsedTrial': False,
+            }
+            new_user_ref = ref.push(new_user)
+            user_id = new_user_ref.key
+            user_found = {**new_user, 'userId': user_id}
+
+        # Store user session
+        session['user'] = {
+            'userId': user_found['userId'],
+            'username': user_found['username'],
+            'email': user_found['email'],
+            'isSubscribed': user_found['isSubscribed'],
+        }
+        return jsonify({'message': 'Google login successful', 'user': session['user']}), 200
+
+    except Exception as e:
+        print(f"Error verifying Google ID token: {e}")
+        return jsonify({'message': 'Invalid Google ID token'}), 400
+def handle_password_login(email, password):
+    """Handle password-based login."""
+    try:
+        users = ref.order_by_child('email').equal_to(email).get()
+        user_found = None
+
+        if users:
+            # Extract user data and Firebase key as userId
+            for user_id_key, user_data in users.items():
+                if user_data['email'] == email:
+                    user_found = {**user_data, 'userId': user_id_key}
+                    break
+
+        if not user_found or not check_password_hash(user_found['password'], password):
+            return jsonify({'message': 'Invalid email or password'}), 400
+
+        # Store user session
+        session['user'] = {
+            'userId': user_found['userId'],
+            'username': user_found['username'],
+            'email': user_found['email'],
+            'isSubscribed': user_found['isSubscribed']
+        }
+        return jsonify({'message': 'Login successful', 'user': session['user']}), 200
+
+    except Exception as e:
+        print(f"Error during login: {e}")
+        return jsonify({'message': 'An error occurred during login'}), 500
 
 
 @user.route('/user/logout', methods=['POST'])

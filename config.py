@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 import os
 
 # Load .env file
-# load_dotenv()
+load_dotenv()
 
 FIREBASE_CONFIG = {
     "type": os.getenv("FIREBASE_TYPE"),
