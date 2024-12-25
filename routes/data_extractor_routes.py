@@ -61,6 +61,7 @@ def extract_data():
             firebase_ref = db.reference(f'uploads/{user_id}/{group_id}/{sanitized_filename}')
             firebase_ref.set(data)
 
+
         return data, file.filename
 
     # Process files asynchronously
