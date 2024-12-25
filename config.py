@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import os
-
+import redis
+import logging
 # Load .env file
 load_dotenv()
 
@@ -42,6 +43,9 @@ class DevelopmentConfig(Config):
 class ProductionConfig(Config):
     """Production configuration."""
     SESSION_COOKIE_SECURE = True  # Secure cookies for HTTPS
+    SESSION_TYPE = "redis"  # Use Redis for session storage
+    SESSION_REDIS = redis.StrictRedis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
     CACHE_TYPE = "RedisCache"
     CACHE_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     CLIENT_URL = os.getenv("PROD_CLIENT_URL")
+    LOG_LEVEL = logging.WARNING
