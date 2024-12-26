@@ -33,9 +33,29 @@ init_mail(app)
 
 # Enable CORS
 CORS(app, supports_credentials=True, resources={r"/*": {"origins": os.getenv('CLIENT_URL')}})
+import logging
+import redis
+
+@app.before_request
+def log_session():
+    try:
+        redis_client = redis.StrictRedis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+        redis_client.ping()
+        print("Redis connection successful!")
+    except Exception as e:
+        print(f"Redis connection failed: {e}")
+
+    logging.info(f"Session contents before request: {dict(session)}")
+
+@app.after_request
+def log_session_save(response):
+    logging.info(f"Session contents after request: {dict(session)}")
+    return response
 
 # Register routes
 register_blueprints(app)
+
+
 
 if __name__ == "__main__":
     app.run(debug=app.config["DEBUG"], port=os.getenv("SERVER_PORT", 5000))
