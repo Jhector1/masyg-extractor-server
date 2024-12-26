@@ -41,7 +41,7 @@ if ENV == "production":
     app.config['SESSION_COOKIE_HTTPONLY'] = True
 
     app.config['SESSION_COOKIE_SECURE'] = True
-    # app.config['SESSION_COOKIE_DOMAIN'] = os.getenv('SERVER_URL', None),
+    app.config['SESSION_COOKIE_DOMAIN'] = os.getenv('SERVER_URL', None),
     # Configure Redis for storing the session data on the server-side
     # app.config['SESSION_TYPE'] = 'redis'
     # app.config['SESSION_PERMANENT'] = False
