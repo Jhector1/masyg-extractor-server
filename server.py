@@ -1,10 +1,9 @@
 import os
-from flask import Flask
+from flask import Flask,session
 from flask_session import Session
 from flask_caching import Cache
 from flask_cors import CORS
 from dotenv import load_dotenv, find_dotenv
-
 from config import DevelopmentConfig, ProductionConfig
 from firebase.firebase_init import firebase_init
 from tools.helper import init_mail
