@@ -40,12 +40,22 @@ class DevelopmentConfig(Config):
     CLIENT_URL = os.getenv("DEV_CLIENT_URL", "http://localhost:3000")
 
 
+# class ProductionConfig(Config):
+#     """Production configuration."""
+#     SESSION_COOKIE_SECURE = True  # Secure cookies for HTTPS
+#     SESSION_TYPE = "redis"  # Use Redis for session storage
+#     SESSION_REDIS = redis.StrictRedis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+#     CACHE_TYPE = "RedisCache"
+#     CACHE_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+#     CLIENT_URL = os.getenv("PROD_CLIENT_URL")
+#     LOG_LEVEL = logging.WARNING
+
 class ProductionConfig(Config):
     """Production configuration."""
     SESSION_COOKIE_SECURE = True  # Secure cookies for HTTPS
-    SESSION_TYPE = "redis"  # Use Redis for session storage
-    SESSION_REDIS = redis.StrictRedis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-    CACHE_TYPE = "RedisCache"
-    CACHE_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    SESSION_TYPE = "filesystem"  # Use Filesystem for session storage
+    SESSION_FILE_DIR = os.getenv("SESSION_FILE_DIR", "/tmp/flask_sessions")  # Default directory for sessions
+    SESSION_FILE_THRESHOLD = 500  # Maximum number of session files before cleanup
+    CACHE_TYPE = "SimpleCache"
     CLIENT_URL = os.getenv("PROD_CLIENT_URL")
     LOG_LEVEL = logging.WARNING
