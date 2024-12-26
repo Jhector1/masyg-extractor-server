@@ -27,11 +27,45 @@ app = Flask(__name__)
 print(f"Session env: {ENV}")
 logging.info(f"Session env: {ENV}")
 # Load the appropriate configuration
+# if ENV == "production":
+#     app.config.from_object(ProductionConfig)
+#     ProductionConfig.init_app(app)
 if ENV == "production":
+    # Secure secret key for the application
+    app.secret_key = os.getenv('SECRET_KEY', default='BAD_SECRET_KEY')
+    app.config['SESSION_TYPE'] = 'redis'
+    app.config['SESSION_PERMANENT'] = False
+    app.config['SESSION_USE_SIGNER'] = True
+    app.config['SESSION_REDIS'] = redis.from_url(os.getenv('REDIS_URL', 'redis://127.0.0.1:6379'))
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
 
-
-    app.config.from_object(ProductionConfig)
-    ProductionConfig.init_app(app)
+    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_DOMAIN'] = os.getenv('SERVER_URL', None),
+    # Configure Redis for storing the session data on the server-side
+    # app.config['SESSION_TYPE'] = 'redis'
+    # app.config['SESSION_PERMANENT'] = False
+    # app.config['SESSION_USE_SIGNER'] = True
+    # app.config['SESSION_REDIS'] = redis.from_url('redis://127.0.0.1:6379')
+    # app.secret_key = os.getenv('SECRET_KEY', 'BAD_SECRET_KEY')
+    #
+    # # Configure Redis for session management
+    # app.config.update(
+    #     SESSION_TYPE='redis',
+    #     SESSION_PERMANENT=False,
+    #     SESSION_USE_SIGNER=True,
+    #     SESSION_REDIS=redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0')),
+    #     SESSION_COOKIE_DOMAIN=os.getenv('SERVER_URL', None),
+    #     SESSION_COOKIE_SECURE=False,  # Set to True in production
+    #     SESSION_COOKIE_HTTPONLY=False,  # Set to True in production
+    #     SESSION_COOKIE_SAMESITE='Lax',
+    #     CACHE_TYPE='RedisCache',
+    #     CACHE_REDIS_URL=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+    #     LOG_LEVEL=logging.WARNING
+    # )
+    #
+    # # Set the client URL for production environment
+    # CLIENT_URL = os.getenv('PROD_CLIENT_URL')
 else:
     app.config.from_object(DevelopmentConfig)
 

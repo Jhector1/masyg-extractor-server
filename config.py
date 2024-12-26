@@ -57,8 +57,8 @@ class ProductionConfig(Config):
     """Production configuration."""
     SESSION_TYPE = "redis"
     SESSION_COOKIE_DOMAIN = os.getenv('SERVER_URL', None)
-    SESSION_COOKIE_SECURE = True
-    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SECURE = False #True
+    SESSION_COOKIE_HTTPONLY = False #True
     SESSION_COOKIE_SAMESITE = 'Lax'
     SESSION_REDIS = redis.StrictRedis.from_url(
         os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -76,7 +76,7 @@ class ProductionConfig(Config):
         app.logger.info(f"SESSION_TYPE: {app.config['SESSION_TYPE']}")
         app.logger.info(f"SESSION_COOKIE_DOMAIN: {app.config['SESSION_COOKIE_DOMAIN']}")
         app.logger.info(f"SESSION_REDIS: {app.config['SESSION_REDIS']}")
-        app.logger.info(f"CACHE_REDIS_URL: {app.config['CACHE_REDIS_URL']}")
+        # app.logger.info(f"CACHE_REDIS_URL: {app.config['CACHE_REDIS_URL']}")
 
 # class ProductionConfig(Config):
 #     """Production configuration."""
