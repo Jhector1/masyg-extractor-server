@@ -19,6 +19,7 @@ ENV = os.getenv("FLASK_ENV", "development").lower()
 
 # Initialize Flask app
 app = Flask(__name__)
+print(f"Session env: {ENV}")
 logging.info(f"Session env: {ENV}")
 # Load the appropriate configuration
 if ENV == "production":
