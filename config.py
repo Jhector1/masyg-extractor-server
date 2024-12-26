@@ -49,13 +49,29 @@ class DevelopmentConfig(Config):
 #     CACHE_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 #     CLIENT_URL = os.getenv("PROD_CLIENT_URL")
 #     LOG_LEVEL = logging.WARNING
-
 class ProductionConfig(Config):
     """Production configuration."""
-    SESSION_COOKIE_SECURE = True  # Secure cookies for HTTPS
-    SESSION_TYPE = "filesystem"  # Use Filesystem for session storage
-    SESSION_FILE_DIR = os.getenv("SESSION_FILE_DIR", "/tmp/flask_sessions")  # Default directory for sessions
-    SESSION_FILE_THRESHOLD = 500  # Maximum number of session files before cleanup
-    CACHE_TYPE = "SimpleCache"
+    SESSION_TYPE = "redis"
+    SESSION_COOKIE_DOMAIN = os.getenv('SERVER_URL') # Shared across subdomains
+    SESSION_COOKIE_SECURE = True  # Secure for HTTPS
+    SESSION_COOKIE_HTTPONLY = True  # Protect session cookies from JavaScript
+    SESSION_COOKIE_SAMESITE = 'Lax'  # Prevent CSRF but allow subdomain sharing
+    SESSION_REDIS = redis.StrictRedis.from_url(
+        os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    )
+    SECRET_KEY = os.getenv("SECRET_KEY", "masyg-extractor-secret-key")
+    """Production configuration."""
+    CACHE_TYPE = "RedisCache"
+    CACHE_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     CLIENT_URL = os.getenv("PROD_CLIENT_URL")
     LOG_LEVEL = logging.WARNING
+# class ProductionConfig(Config):
+#     """Production configuration."""
+#     SESSION_COOKIE_SECURE = True  # Secure cookies for HTTPS
+#     SESSION_TYPE = "filesystem"  # Use Filesystem for session storage
+#     SESSION_FILE_DIR = os.getenv("SESSION_FILE_DIR", "/tmp/flask_sessions")  # Default directory for sessions
+#     SESSION_FILE_THRESHOLD = 500  # Maximum number of session files before cleanup
+#     CACHE_TYPE = "SimpleCache"
+#     CLIENT_URL = os.getenv("PROD_"
+#                            "CLIENT_URL")
+#     LOG_LEVEL = logging.WARNING
