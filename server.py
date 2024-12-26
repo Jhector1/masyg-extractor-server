@@ -8,6 +8,8 @@ from config import DevelopmentConfig, ProductionConfig
 from firebase.firebase_init import firebase_init
 from tools.helper import init_mail
 from routes import register_blueprints
+import logging
+import redis
 
 # Load environment variables
 load_dotenv(find_dotenv())
@@ -17,9 +19,11 @@ ENV = os.getenv("FLASK_ENV", "development").lower()
 
 # Initialize Flask app
 app = Flask(__name__)
-
+logging.info(f"Session env: {ENV}")
 # Load the appropriate configuration
 if ENV == "production":
+
+
     app.config.from_object(ProductionConfig)
     ProductionConfig.init_app(app)
 else:
@@ -33,8 +37,6 @@ init_mail(app)
 
 # Enable CORS
 CORS(app, supports_credentials=True, resources={r"/*": {"origins": os.getenv('CLIENT_URL')}})
-import logging
-import redis
 
 logging.basicConfig(level=logging.DEBUG)
 @app.before_request
