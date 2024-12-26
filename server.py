@@ -21,6 +21,7 @@ app = Flask(__name__)
 # Load the appropriate configuration
 if ENV == "production":
     app.config.from_object(ProductionConfig)
+    ProductionConfig.init_app(app)
 else:
     app.config.from_object(DevelopmentConfig)
 
@@ -35,6 +36,7 @@ CORS(app, supports_credentials=True, resources={r"/*": {"origins": os.getenv('CL
 import logging
 import redis
 
+logging.basicConfig(level=logging.DEBUG)
 @app.before_request
 def log_session():
     try:

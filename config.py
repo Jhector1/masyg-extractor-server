@@ -49,22 +49,35 @@ class DevelopmentConfig(Config):
 #     CACHE_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 #     CLIENT_URL = os.getenv("PROD_CLIENT_URL")
 #     LOG_LEVEL = logging.WARNING
+# import os
+# import logging
+# import redis
+
 class ProductionConfig(Config):
     """Production configuration."""
     SESSION_TYPE = "redis"
-    SESSION_COOKIE_DOMAIN = os.getenv('SERVER_URL') # Shared across subdomains
-    SESSION_COOKIE_SECURE = True  # Secure for HTTPS
-    SESSION_COOKIE_HTTPONLY = True  # Protect session cookies from JavaScript
-    SESSION_COOKIE_SAMESITE = 'Lax'  # Prevent CSRF but allow subdomain sharing
+    SESSION_COOKIE_DOMAIN = os.getenv('SERVER_URL', None)
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
     SESSION_REDIS = redis.StrictRedis.from_url(
         os.getenv("REDIS_URL", "redis://localhost:6379/0")
     )
-    SECRET_KEY = os.getenv("SECRET_KEY", "masyg-extractor-secret-key")
-    """Production configuration."""
+    SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret-key")
     CACHE_TYPE = "RedisCache"
     CACHE_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     CLIENT_URL = os.getenv("PROD_CLIENT_URL")
     LOG_LEVEL = logging.WARNING
+
+    @staticmethod
+    def init_app(app):
+        # Log configuration for debugging
+        logging.basicConfig(level=ProductionConfig.LOG_LEVEL)
+        app.logger.info(f"SESSION_TYPE: {app.config['SESSION_TYPE']}")
+        app.logger.info(f"SESSION_COOKIE_DOMAIN: {app.config['SESSION_COOKIE_DOMAIN']}")
+        app.logger.info(f"SESSION_REDIS: {app.config['SESSION_REDIS']}")
+        app.logger.info(f"CACHE_REDIS_URL: {app.config['CACHE_REDIS_URL']}")
+
 # class ProductionConfig(Config):
 #     """Production configuration."""
 #     SESSION_COOKIE_SECURE = True  # Secure cookies for HTTPS
