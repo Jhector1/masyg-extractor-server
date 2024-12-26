@@ -16,6 +16,11 @@ load_dotenv(find_dotenv())
 
 # Determine the environment
 ENV = os.getenv("FLASK_ENV", "development").lower()
+logging.basicConfig(
+    level=logging.DEBUG,  # Ensure DEBUG level logging is enabled
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]  # Send logs to the console
+)
 
 # Initialize Flask app
 app = Flask(__name__)
