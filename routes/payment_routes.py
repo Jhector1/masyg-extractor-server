@@ -42,7 +42,7 @@ def get_checkout_session():
 @payment.route('/payment/create-checkout-session', methods=['POST'])
 def create_checkout_session():
     """
-    Create a new Checkout Session for the logged-in user's subscription.
+    Create a new Checkout Session for the ljogged-in user's subscription.
     Apply a free trial only if the user has not already used one.
     """
     firebase_user = session.get('user')
