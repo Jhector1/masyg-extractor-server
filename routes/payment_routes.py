@@ -5,6 +5,7 @@ import os
 import stripe
 import time
 from firebase_admin import db
+from datetime import datetime
 
 
 ENDPOINT_SECRET = os.getenv('MASYG_EXTRACTOR_WEBHOOK_SECRET')
@@ -85,18 +86,35 @@ def create_checkout_session():
             'message': 'You have already used your free trial. Please choose a paid plan.'
         }), 401
 
-    price = 'price_1QUPa5Q7NgL1u0bJGYeEIEBc'
-    domain_url = f"{os.getenv('SERVER_URL')}:3000"
+    price_id = os.getenv('STRIPE_PRICE_ID')
+    domain_url = f"{os.getenv('CLIENT_URL')}"
+    plan= 'Free Trial' if free_trial else 'Monthly'
+
+    try:
+        price_object = stripe.Price.retrieve(price_id)
+        plan_price = price_object.unit_amount / 100  # Convert to dollars (from cents)
+    except Exception as e:
+        print(f"Error retrieving price details: {str(e)}")
+        return jsonify({'error': {'message': 'Failed to retrieve price details'}}), 500
+
+    # Get the current date
+    current_date = datetime.now()
+
+
+    # Format the date as MM/DD/YYYY
+    start_date = current_date.strftime("%m/%d/%Y")
+
+
 
     try:
         # Create a Checkout Session
         checkout_session_obj = stripe.checkout.Session.create(
             payment_method_types=['card'],
-            success_url=f"{domain_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
+            success_url=f"{domain_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}&plan={plan}&price={plan_price}",
             cancel_url=f"{domain_url}/",
             mode='subscription',
             customer=stripe_customer_id,
-            line_items=[{'price': price, 'quantity': 1}],
+            line_items=[{'price': price_id, 'quantity': 1}],
             subscription_data={
                 # Apply the free trial if eligible
                 'trial_period_days': 7 if free_trial and not has_used_trial else None
