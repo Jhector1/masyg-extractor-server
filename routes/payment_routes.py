@@ -116,8 +116,12 @@ def create_checkout_session():
             success_url=f"{domain_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}&plan={plan}&price={plan_price}",
             cancel_url=f"{domain_url}/",
             mode='subscription',
+            automatic_tax={"enabled": True},
             customer=stripe_customer_id,
             line_items=[{'price': price_id, 'quantity': 1}],
+            customer_update={
+                "address": "auto",
+            },
             subscription_data={
                 # Apply the free trial if eligible
                 'trial_period_days': 7 if free_trial and not has_used_trial else None
