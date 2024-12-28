@@ -6,6 +6,7 @@ import stripe
 import time
 from firebase_admin import db
 from datetime import datetime
+import logging
 
 
 ENDPOINT_SECRET = os.getenv('MASYG_EXTRACTOR_WEBHOOK_SECRET')
@@ -21,6 +22,8 @@ stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
 ref = db.reference('users')
 
 payment = Blueprint('payment', __name__)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 @payment.route('/config', methods=['GET'])
 def get_publishable_key():
@@ -92,7 +95,7 @@ def create_checkout_session():
 
     try:
         price_object = stripe.Price.retrieve(price_id)
-        plan_price = price_object.unit_amount / 100  # Convert to dollars (from cents)
+        plan_price = 0.00 if free_trial else price_object.unit_amount / 100  # Convert to dollars (from cents)
     except Exception as e:
         print(f"Error retrieving price details: {str(e)}")
         return jsonify({'error': {'message': 'Failed to retrieve price details'}}), 500
@@ -346,9 +349,13 @@ def get_payment_methods():
         else:
             return jsonify({'message': 'No payment methods found'}), 404
 
-    except Exception as e:
-        print(f"Error fetching payment methods: {str(e)}")
+    except stripe.error.StripeError as e:
+        logging.error(f"Stripe API error: {str(e)}")
         return jsonify({'error': 'Failed to retrieve payment methods'}), 500
+    except Exception as e:
+        logging.error(f"Unexpected error: {str(e)}")
+        return jsonify({'error': 'An unexpected error occurred'}), 500
+
 
 @payment.route('/payment/payment-method/delete', methods=['POST'])
 def delete_payment_method():
@@ -406,11 +413,12 @@ def delete_payment_method():
         stripe.PaymentMethod.detach(payment_method_id)
         return jsonify({'message': 'Payment method deleted successfully'}), 200
 
-    except Exception as e:
-        print(f"Error deleting payment method: {str(e)}")
+    except stripe.error.StripeError as e:
+        logging.error(f"Stripe API error: {str(e)}")
         return jsonify({'error': 'Failed to delete payment method'}), 500
-
-
+    except Exception as e:
+        logging.error(f"Unexpected error: {str(e)}")
+        return jsonify({'error': 'An unexpected error occurred'}), 500
 
 @payment.route('/payment/subscription/reactivate', methods=['POST'])
 def reactivate_subscription():
