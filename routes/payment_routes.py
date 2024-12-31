@@ -128,6 +128,7 @@ def create_checkout_session():
             }
         )
 
+
         return jsonify({'url': checkout_session_obj.url, 'id': checkout_session_obj.id})
     except Exception as e:
         print(f"Error creating checkout session: {str(e)}")
@@ -459,7 +460,7 @@ def reactivate_subscription():
         # Create a new subscription using the price ID
         new_subscription = stripe.Subscription.create(
             customer=stripe_customer_id,
-            items=[{"price": "price_1QUPa5Q7NgL1u0bJGYeEIEBc"}],  # Use your price ID here
+            items=[{"price":os.getenv('STRIPE_PRICE_ID')}],  # Use your price ID here
             default_payment_method=payment_methods.data[0].id,  # Use the first valid payment method
         )
 
