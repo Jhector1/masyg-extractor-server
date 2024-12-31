@@ -323,3 +323,31 @@ def reset_password():
             return jsonify({'message': 'Password updated successfully.'}), 200
 
     return jsonify({'error': 'Invalid or expired token.'}), 400
+@user.route('/user/create-customer-portal', methods=['POST'])
+def create_customer_portal():
+    try:
+        # Check if the user is logged in
+        if 'user' not in session:
+            return jsonify({"error": "User not logged in"}), 401
+
+        # Get the customer ID from the session
+
+        firebase_user = session['user']
+        firebase_user_id = firebase_user.get('userId')
+        user_data = ref.child(firebase_user_id).get()
+        customer_id = user_data.get('stripeCustomerId')
+        print(user_data.get('stripeCustomerId'))
+
+        if not customer_id:
+            return jsonify({"error": "Stripe customer ID not found for the user"}), 400
+
+        # Create the customer portal session
+        session_data = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=os.getenv('CLIENT_URL')  # Replace with your desired return URL
+        )
+
+        return jsonify({"url": session_data.url}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

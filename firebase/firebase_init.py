@@ -9,7 +9,7 @@ def firebase_init():
 
     cred = credentials.Certificate(FIREBASE_CONFIG)
     firebase_admin.initialize_app(cred, {
-        'databaseURL': 'https://masyg-extractor-db-default-rtdb.firebaseio.com/'
+        'databaseURL': os.getenv('FIREBASE_DATABASE_URL')
     })
 
 

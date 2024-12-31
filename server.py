@@ -10,6 +10,7 @@ from tools.helper import init_mail
 from routes import register_blueprints
 import logging
 import redis
+import stripe
 
 # Load environment variables
 load_dotenv(find_dotenv())
@@ -26,6 +27,13 @@ logging.basicConfig(
 app = Flask(__name__)
 print(f"Session env: {ENV}")
 logging.info(f"Session env: {ENV}")
+stripe.set_app_info(
+    'stripe-samples/checkout-single-subscription',
+    version='0.0.1',
+    url='https://github.com/stripe-samples/checkout-single-subscription'
+)
+stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
+
 # Load the appropriate configuration
 # if ENV == "production":
 #     app.config.from_object(ProductionConfig)

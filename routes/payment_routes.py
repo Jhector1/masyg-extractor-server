@@ -11,12 +11,12 @@ import logging
 
 ENDPOINT_SECRET = os.getenv('MASYG_EXTRACTOR_WEBHOOK_SECRET')
 # Setup Stripe
-stripe.set_app_info(
-    'stripe-samples/checkout-single-subscription',
-    version='0.0.1',
-    url='https://github.com/stripe-samples/checkout-single-subscription'
-)
-stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
+# stripe.set_app_info(
+#     'stripe-samples/checkout-single-subscription',
+#     version='0.0.1',
+#     url='https://github.com/stripe-samples/checkout-single-subscription'
+# )
+# stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
 
 # Firebase reference for users
 ref = db.reference('users')
@@ -90,7 +90,7 @@ def create_checkout_session():
         }), 401
 
     price_id = os.getenv('STRIPE_PRICE_ID')
-    domain_url = f"{os.getenv('CLIENT_URL')}"
+    domain_url = os.getenv('CLIENT_URL')
     plan= 'Free Trial' if free_trial else 'Monthly'
 
     try:
