@@ -6,7 +6,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv, find_dotenv
 from config import DevelopmentConfig, ProductionConfig
 from firebase.firebase_init import firebase_init
-from tools.helper import init_mail
+from services.helper import init_mail
 from routes import register_blueprints
 import logging
 import redis
@@ -18,7 +18,7 @@ load_dotenv(find_dotenv())
 # Determine the environment
 ENV = os.getenv("FLASK_ENV", "development").lower()
 logging.basicConfig(
-    level=logging.DEBUG,  # Ensure DEBUG level logging is enabled
+    level=logging.WARNING,  # Ensure DEBUG level logging is enabled
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]  # Send logs to the console
 )
@@ -86,7 +86,7 @@ init_mail(app)
 # Enable CORS
 CORS(app, supports_credentials=True, resources={r"/*": {"origins": os.getenv('CLIENT_URL')}})
 
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 @app.before_request
 def log_session():
     try:
