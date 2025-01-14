@@ -94,6 +94,9 @@ import json
 import os
 import base64
 
+import os
+import base64
+
 
 def setup_google_credentials():
     """
@@ -105,6 +108,11 @@ def setup_google_credentials():
     if not credentials_base64:
         raise Exception("Google Cloud credentials not found in environment variables!")
 
+    # Fix base64 padding
+    missing_padding = len(credentials_base64) % 4
+    if missing_padding:
+        credentials_base64 += "=" * (4 - missing_padding)
+
     # Decode the base64 string
     credentials_json = base64.b64decode(credentials_base64).decode("utf-8")
 
@@ -115,4 +123,5 @@ def setup_google_credentials():
 
     # Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+
 
