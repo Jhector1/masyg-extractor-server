@@ -124,7 +124,10 @@ def create_checkout_session():
             subscription_data={
                 # Apply the free trial if eligible
                 'trial_period_days': 7 if free_trial and not has_used_trial else None
-            }
+            },
+            consent_collection={
+                'terms_of_service': 'required'
+            },
         )
 
 

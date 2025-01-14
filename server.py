@@ -11,6 +11,7 @@ from routes import register_blueprints
 import logging
 import redis
 import stripe
+from config import *
 
 # Load environment variables
 load_dotenv(find_dotenv())
@@ -25,7 +26,7 @@ logging.basicConfig(
 
 # Initialize Flask app
 app = Flask(__name__)
-print(f"Session env: {ENV}")
+
 logging.info(f"Session env: {ENV}")
 stripe.set_app_info(
     'stripe-samples/checkout-single-subscription',
@@ -74,6 +75,7 @@ if ENV == "production":
     #
     # # Set the client URL for production environment
     # CLIENT_URL = os.getenv('PROD_CLIENT_URL')
+    setup_google_credentials()
 else:
     app.config.from_object(DevelopmentConfig)
 
@@ -92,7 +94,7 @@ def log_session():
     try:
         redis_client = redis.StrictRedis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
         redis_client.ping()
-        print("Redis connection successful!")
+        # print("Redis connection successful!")
     except Exception as e:
         print(f"Redis connection failed: {e}")
 

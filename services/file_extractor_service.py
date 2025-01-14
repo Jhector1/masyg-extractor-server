@@ -5,11 +5,21 @@ from transformers import pipeline
 import PyPDF2
 import openai
 import json
+import boto3
 from functools import reduce
 from flask_cors import CORS
 import pdfplumber
 import pandas as pd
 import os
+import requests
+import logging
+
+from pdf2image import convert_from_path
+from google.cloud import vision
+from io import BytesIO
+from pdf2image import convert_from_bytes
+import pytesseract
+import logging
 
 import fitz  # PyMuPDF
 
@@ -62,6 +72,115 @@ def parse_json_to_dataframe(json_content,
 #         logging.error(f"Error extracting text from PDF {file.filename}: {e}")
 #         return ""
 
+import requests
+import logging
+
+
+
+from pdf2image import convert_from_bytes
+from google.cloud import vision
+from io import BytesIO
+
+from pdf2image import convert_from_bytes
+from google.cloud import vision
+from io import BytesIO
+
+def extract_text_from_pdf_image(file):
+    """
+    Extract raw text from a PDF file-like object using Google Cloud Vision API.
+
+    :param file: A file-like object (e.g., from request.files) containing the PDF.
+    :return: Extracted text as a string.
+    """
+    # Initialize the Vision API client
+    client = vision.ImageAnnotatorClient()
+
+    # Convert PDF (from bytes) to images
+    file_content = file.read()  # Read the uploaded file content
+    images = convert_from_bytes(file_content)  # Poppler will use the default path
+
+    extracted_text = ""
+
+    # Process each image and extract text
+    for image in images:
+        # Convert image to bytes for Vision API
+        image_byte_array = BytesIO()
+        image.save(image_byte_array, format="JPEG")
+        image_content = image_byte_array.getvalue()
+
+        # Send image to Vision API
+        vision_image = vision.Image(content=image_content)
+        response = client.text_detection(image=vision_image)
+
+        if response.error.message:
+            raise Exception(f"Vision API error: {response.error.message}")
+
+        # Append detected text
+        texts = response.text_annotations
+        extracted_text += texts[0].description if texts else ""
+
+    return extracted_text
+
+
+
+
+
+
+
+def extract_text_with_ocr_space( uploaded_file, api_key='K84148755688957'):
+    """
+    Extract text from an image-based PDF using OCR.Space API, accepting a file from Flask `request.files`.
+
+    :param api_key: Your OCR.Space API key.
+    :param uploaded_file: A file-like object from `request.files`.
+    :return: Extracted text as a single string.
+    """
+    try:
+        # Define the API endpoint
+        ocr_url = "https://api.ocr.space/parse/image"
+
+        # Send the file to OCR.Space API
+        response = requests.post(
+            ocr_url,
+            files={'file': (uploaded_file.filename, uploaded_file.stream, uploaded_file.mimetype)},
+            data={
+                'apikey': api_key,
+                'language': 'eng',  # Default language (English)
+                'isOverlayRequired': False  # True if text position overlay is required
+            },
+            timeout=60  # Timeout for the request
+        )
+
+        # Check HTTP response status
+        if response.status_code != 200:
+            logging.error(f"OCR.Space API error (HTTP {response.status_code}): {response.text}")
+            return ""
+
+        # Parse JSON response
+        result = response.json()
+        if not result.get('ParsedResults'):
+            logging.error(f"OCR.Space returned no results: {result}")
+            return ""
+
+        # Extract text from all parsed results
+        extracted_text = " ".join(res.get('ParsedText', '') for res in result['ParsedResults'])
+
+        return extracted_text.strip()
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Request exception during OCR.Space API call: {e}")
+        return ""
+
+    except Exception as e:
+        logging.error(f"Unexpected error during OCR extraction: {e}")
+        return ""
+
+
+
+
+
+
+
 
 
 def extract_text_from_pdf(file):
@@ -74,7 +193,8 @@ def extract_text_from_pdf(file):
     try:
         # Read the file into memory
         pdf_data = file.read()
-
+        # Reset the file pointer for future use
+        file.seek(0)
         # Open the PDF from the in-memory bytes
         with fitz.open(stream=pdf_data, filetype="pdf") as doc:
             all_text = []

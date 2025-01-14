@@ -151,7 +151,7 @@ def update_user_info():
 
     firebase_user_id = firebase_user.get('userId')
     user_data = ref.child(firebase_user_id).get()
-    print(user_data)
+
 
     if not user_data:
         return jsonify({'error': 'User not found in Firebase'}), 404
@@ -170,7 +170,7 @@ def update_user_info():
         #     return jsonify({'error': 'Email already exists'}), 400
 
         # Validate the old email and old password
-        print(user_data['password'],old_password)
+
         if not (user_data['email'].lower().strip()== old_email and check_password_hash(user_data['password'], old_password)):
             return jsonify({
                 'error': 'Invalid email or password. Please provide correct credentials to update your information.'
@@ -266,7 +266,7 @@ def create_customer_portal():
         firebase_user_id = firebase_user.get('userId')
         user_data = ref.child(firebase_user_id).get()
         customer_id = user_data.get('stripeCustomerId')
-        print(user_data.get('stripeCustomerId'))
+
 
         if not customer_id:
             return jsonify({"error": "Stripe customer ID not found for the user"}), 400

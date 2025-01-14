@@ -88,3 +88,31 @@ class ProductionConfig(Config):
 #     CLIENT_URL = os.getenv("PROD_"
 #                            "CLIENT_URL")
 #     LOG_LEVEL = logging.WARNING
+import os
+import json
+
+import os
+import base64
+
+
+def setup_google_credentials():
+    """
+    Decode the base64-encoded Google credentials JSON
+    and set it up for the Vision API.
+    """
+    credentials_base64 = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
+
+    if not credentials_base64:
+        raise Exception("Google Cloud credentials not found in environment variables!")
+
+    # Decode the base64 string
+    credentials_json = base64.b64decode(credentials_base64).decode("utf-8")
+
+    # Write the JSON content to a temporary file
+    credentials_path = "/tmp/google_credentials.json"
+    with open(credentials_path, "w") as file:
+        file.write(credentials_json)
+
+    # Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+

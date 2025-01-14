@@ -9,7 +9,7 @@ __pycache__/
 
 # Flask secret key or config files
 instance/
-config.py
+service_account_base64.txt
 
 # Virtual environments
 venv/
