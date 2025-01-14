@@ -34,6 +34,9 @@ stripe.set_app_info(
     url='https://github.com/stripe-samples/checkout-single-subscription'
 )
 stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
+test_google_vision()
+verify_tmp_access()
+setup_google_credentials()
 
 # Load the appropriate configuration
 # if ENV == "production":
@@ -75,7 +78,7 @@ if ENV == "production":
     #
     # # Set the client URL for production environment
     # CLIENT_URL = os.getenv('PROD_CLIENT_URL')
-    setup_google_credentials()
+
 else:
     app.config.from_object(DevelopmentConfig)
 

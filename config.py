@@ -97,16 +97,10 @@ import base64
 import os
 import base64
 
-
 def setup_google_credentials():
-    """
-    Decode the base64-encoded Google credentials JSON
-    and set it up for the Vision API.
-    """
     credentials_base64 = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
-
     if not credentials_base64:
-        raise Exception("Google Cloud credentials not found in environment variables!")
+        raise Exception("GOOGLE_APPLICATION_CREDENTIALS_BASE64 is not set!")
 
     # Fix base64 padding
     missing_padding = len(credentials_base64) % 4
@@ -114,14 +108,41 @@ def setup_google_credentials():
         credentials_base64 += "=" * (4 - missing_padding)
 
     # Decode the base64 string
-    credentials_json = base64.b64decode(credentials_base64).decode("utf-8")
+    try:
+        credentials_json = base64.b64decode(credentials_base64).decode("utf-8")
+        print("Decoded JSON Length:", len(credentials_json))  # Debugging: log length
+        print("Decoded JSON (partial):", credentials_json[:100])  # Debugging: log preview
+    except Exception as e:
+        raise Exception(f"Failed to decode base64: {str(e)}")
 
     # Write the JSON content to a temporary file
     credentials_path = "/tmp/google_credentials.json"
-    with open(credentials_path, "w") as file:
-        file.write(credentials_json)
+    try:
+        with open(credentials_path, "w") as file:
+            file.write(credentials_json)
+        print("Credentials written to:", credentials_path)  # Debugging
+    except Exception as e:
+        raise Exception(f"Failed to write credentials file: {str(e)}")
 
     # Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+import os
 
+def verify_tmp_access():
+    try:
+        test_path = "/tmp/test_tmp_access.txt"
+        with open(test_path, "w") as test_file:
+            test_file.write("This is a test.")
+        print("Write to /tmp succeeded.")
+        os.remove(test_path)
+    except Exception as e:
+        raise Exception(f"Cannot write to /tmp: {str(e)}")
+from google.cloud import vision
+
+def test_google_vision():
+    try:
+        client = vision.ImageAnnotatorClient()
+        print("Google Cloud Vision client initialized successfully.")
+    except Exception as e:
+        raise Exception(f"Failed to initialize Vision API client: {str(e)}")
 

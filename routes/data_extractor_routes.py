@@ -86,7 +86,7 @@ def extract_data():
         results[filename] = data
     flat_list = list(chain.from_iterable(results.values()))
     # print(len(flat_list))
-    print(flat_list)
+
     if len(flat_list) <= 0:
         return jsonify({'error': 'This file does not contain the requested keywords'}), 400
 
@@ -207,8 +207,7 @@ def delete_record(group_id, file_name, record_key):
 
     # --- 4) Check If Record Exists ---
     record_ref = db.reference(record_path)
-    print(group_id, file_name, record_key)
-    print(record_ref)
+
     if not record_ref.get():
         return jsonify({'error': 'Record not found'}), 404
 
