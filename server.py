@@ -34,9 +34,10 @@ stripe.set_app_info(
     url='https://github.com/stripe-samples/checkout-single-subscription'
 )
 stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
-test_google_vision()
-verify_tmp_access()
-setup_google_credentials()
+# test_google_vision()
+# verify_tmp_access()
+# setup_google_credentials()
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/masyg-extractor-f7610ba16076.json"
 
 # Load the appropriate configuration
 # if ENV == "production":
