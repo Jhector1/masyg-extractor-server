@@ -97,7 +97,7 @@ def extract_text_from_pdf_image(file):
 
     # Convert PDF (from bytes) to images
     file_content = file.read()  # Read the uploaded file content
-    images = convert_from_bytes(file_content)  # Poppler will use the default path
+    images = convert_from_bytes(file_content, poppler_path="/usr/bin")  # Poppler will use the default path
 
     extracted_text = ""
 
