@@ -85,7 +85,8 @@ def extract_data():
         data, filename = future.result()
         results[filename] = data
     flat_list = list(chain.from_iterable(results.values()))
-    # print(len(flat_list))
+    print(len(flat_list))
+    print(results)
 
     if len(flat_list) <= 0:
         return jsonify({'error': 'This file does not contain the requested keywords'}), 400

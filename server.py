@@ -37,7 +37,7 @@ stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
 # test_google_vision()
 # verify_tmp_access()
 # setup_google_credentials()
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/masyg-extractor-f7610ba16076.json"
+
 
 # Load the appropriate configuration
 # if ENV == "production":
@@ -91,7 +91,11 @@ init_mail(app)
 
 # Enable CORS
 CORS(app, supports_credentials=True, resources={r"/*": {"origins": os.getenv('CLIENT_URL')}})
+import os
 
+# Set the path dynamically using the home directory
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "masyg-extractor-f7610ba16076.json"
+print(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
 # logging.basicConfig(level=logging.DEBUG)
 @app.before_request
 def log_session():
