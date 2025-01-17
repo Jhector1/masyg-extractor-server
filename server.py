@@ -19,7 +19,7 @@ load_dotenv(find_dotenv())
 # Determine the environment
 ENV = os.getenv("FLASK_ENV", "development").lower()
 logging.basicConfig(
-    level=logging.WARNING,  # Ensure DEBUG level logging is enabled
+    level=logging.INFO,  # Ensure DEBUG level logging is enabled
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]  # Send logs to the console
 )
@@ -95,23 +95,23 @@ import os
 
 # Set the path dynamically using the home directory
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "masyg-extractor-f7610ba16076.json"
-print(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
+# print(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
 # logging.basicConfig(level=logging.DEBUG)
-@app.before_request
-def log_session():
-    try:
-        redis_client = redis.StrictRedis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-        redis_client.ping()
-        # print("Redis connection successful!")
-    except Exception as e:
-        print(f"Redis connection failed: {e}")
-
-    logging.info(f"Session contents before request: {dict(session)}")
-
-@app.after_request
-def log_session_save(response):
-    logging.info(f"Session contents after request: {dict(session)}")
-    return response
+# @app.before_request
+# def log_session():
+#     try:
+#         redis_client = redis.StrictRedis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+#         redis_client.ping()
+#         # print("Redis connection successful!")
+#     except Exception as e:
+#         print(f"Redis connection failed: {e}")
+#
+#     logging.info(f"Session contents before request: {dict(session)}")
+#
+# @app.after_request
+# def log_session_save(response):
+#     logging.info(f"Session contents after request: {dict(session)}")
+#     return response
 
 # Register routes
 register_blueprints(app)

@@ -16,7 +16,7 @@ venv/
 ENV/
 *.venv
 *.env
-
+practest.py
 # Logs
 *.log
 logs/
