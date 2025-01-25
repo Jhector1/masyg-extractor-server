@@ -3,8 +3,9 @@ FROM python:3.12-slim
 
 # Install system dependencies, including Poppler
 RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
     poppler-utils \
-    && apt-get clean
+ && apt-get clean
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
