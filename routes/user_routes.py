@@ -114,12 +114,10 @@ def logout():
     # Clear the session
     session.pop('user', None)
     return jsonify({'message': 'Logout successful'}), 200
-
-
 @user.route('/user/current', methods=['GET'])
 def get_current_user():
     current_user = session.get('user')
-    print(current_user)
+
     if not current_user:
         return jsonify({'error': 'No user is currently logged in'}), 401
 
@@ -217,7 +215,7 @@ def request_reset():
     users = ref.get()
 
     for user_id, user_data in users.items():
-        print(user_data.get('email'), email)
+
         if user_data.get('email') == email:
             # Generate a random token
             token = ''.join(random.choices(string.ascii_letters + string.digits, k=20))

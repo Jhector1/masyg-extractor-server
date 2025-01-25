@@ -40,7 +40,7 @@ if not openai.api_key:
 
 
 def parse_json_to_dataframe(json_content,
-                            fallback_columns=["ProductId", "Description", "Quantity", "Price", "EXT_Price"]):
+                            fallback_columns=["ProductId", "Date", "Vendor_Name", "Description", "Quantity", "Price", "EXT_Price"]):
     """
     Safely parse a JSON string into a Pandas DataFrame.
     If parsing fails, logs the error and writes the invalid JSON to a file.
@@ -335,6 +335,8 @@ def process_text_with_gpt(pdf_text):
                     "[\n"
                     "  {\n"
                     "    \"ProductId\": \"...\",\n"
+                     "   \"Date\": \"...\",\n"
+                     "   \"Vendor_Name\": \"...\",\n"
                     "    \"Description\": \"...\",\n"
                     "    \"Quantity\": \"...\",\n"
                     "    \"Price\": \"...\",\n"

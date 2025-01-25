@@ -10,7 +10,7 @@ from datetime import datetime
 from itertools import chain
 import re
 from services.file_extractor_service import *
-
+from services.image_extractor_service import *
 # Create a Blueprint for the file extractor module
 file_extractor = Blueprint('extractor', __name__)
 
@@ -31,31 +31,44 @@ def sanitize_filename(filename):
 # Create a global or app-level ThreadPoolExecutor with enough workers
 executor = ThreadPoolExecutor(max_workers=5)  # Adjust as needed
 
-def process_file(pdf_file, user_id, group_id):
+def process_file(uploaded_file, user_id, group_id):
     try:
-        logging.info(f"Processing file: {pdf_file.filename}")
-        text_extractors = [
+        logging.info(f"Processing file: {uploaded_file.filename}")
+        # Determine file type (PDF or Image)
+        if uploaded_file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff',)):
+            file_type = 'image'
+        elif uploaded_file.filename.lower().endswith('.pdf'):
+            file_type = 'pdf'
+        else:
+            return {'error': 'Unsupported file type'}, uploaded_file.filename
+
+        pdf_text_extractors = [
             extract_text_from_pdf,
             extract_text_from_pdf_image,
             extract_text_with_ocr_space,
             extract_text_from_scanned_pdf,
             extract_text_from_pdf_camelot,
+
         ]
+        image_text_extractors = [
+            extract_text_from_image,
+        ]
+        text_extractors = pdf_text_extractors if file_type == 'pdf' else image_text_extractors
 
         # Attempt extraction with each extractor
         text = None
         for index, extractor in enumerate(text_extractors):
-            pdf_file.seek(0)  # Reset file pointer for each attempt
+            uploaded_file.seek(0)  # Reset file pointer for each attempt
             logging.info(f"Trying extractor: {extractor.__name__}")
-            text = extractor(pdf_file)
+            text = extractor(uploaded_file)
             if text and text.strip():
                 logging.info(f"Text extraction succeeded with {extractor.__name__}")
                 break
 
         # Handle total failure of text extraction
         if not text or not text.strip():
-            logging.warning(f"No text extracted from: {pdf_file.filename}")
-            return {'error': 'Text extraction failed'}, pdf_file.filename
+            logging.warning(f"No text extracted from: {uploaded_file.filename}")
+            return {'error': 'Text extraction failed'}, uploaded_file.filename
 
         # Process extracted text with GPT, retrying with remaining extractors if needed
         while True:
@@ -70,12 +83,12 @@ def process_file(pdf_file, user_id, group_id):
             index += 1
             if index >= len(text_extractors):
                 logging.warning("No more extractors to retry.")
-                return {'error': 'Text processing failed with all extractors'}, pdf_file.filename
+                return {'error': 'Text processing failed with all extractors'}, uploaded_file.filename
 
-            pdf_file.seek(0)  # Reset file pointer
+            uploaded_file.seek(0)  # Reset file pointer
             next_extractor = text_extractors[index]
             logging.info(f"Retrying with extractor: {next_extractor.__name__}")
-            text = next_extractor(pdf_file)
+            text = next_extractor(uploaded_file)
             # print(text)
             # print(json_content)
 
@@ -84,13 +97,13 @@ def process_file(pdf_file, user_id, group_id):
 
         # Parse JSON content and store records in Firebase
         records = parse_json_to_dataframe(json_content).to_dict(orient='records')
-        sanitized_filename = sanitize_filename(pdf_file.filename)
+        sanitized_filename = sanitize_filename(uploaded_file.filename)
         db.reference(f'uploads/{user_id}/{group_id}/{sanitized_filename}').set(records)
-        return records, pdf_file.filename
+        return records, uploaded_file.filename
 
     except Exception as e:
-        logging.exception(f"Error processing file: {pdf_file.filename}")
-        return {'error': str(e)}, pdf_file.filename
+        logging.exception(f"Error processing file: {uploaded_file.filename}")
+        return {'error': str(e)}, uploaded_file.filename
 
 @file_extractor.route('/extractor/extract-data', methods=['POST'])
 def extract_data():

@@ -49,7 +49,7 @@ def create_checkout_session():
     Apply a free trial only if the user has not already used one.
     """
     firebase_user = session.get('user')
-    print("Session User: ", firebase_user)
+
 
     if not firebase_user:
         return jsonify({'error': 'User not logged in'}), 401

@@ -16,6 +16,9 @@ from config import *
 # Load environment variables
 load_dotenv(find_dotenv())
 
+
+# Initialize Flask app
+app = Flask(__name__)
 # Determine the environment
 ENV = os.getenv("FLASK_ENV", "development").lower()
 logging.basicConfig(
@@ -24,8 +27,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]  # Send logs to the console
 )
 
-# Initialize Flask app
-app = Flask(__name__)
+app.config["SSE_REDIS_URL"] = "redis://localhost:6379/0"
+
 
 logging.info(f"Session env: {ENV}")
 stripe.set_app_info(
@@ -112,11 +115,15 @@ os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "masyg-extractor-f7610ba16076.jso
 # def log_session_save(response):
 #     logging.info(f"Session contents after request: {dict(session)}")
 #     return response
-
 # Register routes
 register_blueprints(app)
 
 
 
 if __name__ == "__main__":
-    app.run(debug=app.config["DEBUG"], port=os.getenv("SERVER_PORT", 5000))
+    if os.getenv("FLASK_ENV") == "production":
+        app.run(debug=False, port=os.getenv("SERVER_PORT", 5000))
+    else:
+        app.run(debug=True, port=os.getenv("SERVER_PORT", 5000))
+
+    # app.run(debug=app.config["DEBUG"], port=os.getenv("SERVER_PORT", 5000))
