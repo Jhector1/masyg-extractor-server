@@ -126,4 +126,4 @@ if __name__ == "__main__":
     else:
         app.run(debug=True, port=os.getenv("SERVER_PORT", 5000))
 
-    # app.run(debug=app.config["DEBUG"], port=os.getenv("SERVER_PORT", 5000))
+    # app.run(debug=app.config["DEBUG"], port=os.getenv("SERVER_PORT", 5000
