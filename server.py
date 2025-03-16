@@ -72,16 +72,7 @@ init_mail(app)
 # (Optional) Add production security middleware.
 # -------------------------
 
-from fastapi.middleware.cors import CORSMiddleware
 
-origins = [settings.client_url, "http://localhost:3000"] if settings.client_url else ["http://localhost:3000"]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=['*'],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -125,7 +116,16 @@ class WebsocketSafeSessionMiddleware(SessionMiddleware):
         # Otherwise, handle as usual.
         return await super().__call__(scope, receive, send)
 
+from fastapi.middleware.cors import CORSMiddleware
 
+origins = [settings.client_url, "http://localhost:3000"] if settings.client_url else ["http://localhost:3000"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 if ENV == "production":
     # Conditional HTTPS redirect (bypasses websockets)
     app.add_middleware(ConditionalHTTPSRedirectMiddleware)
@@ -133,8 +133,7 @@ if ENV == "production":
     # Use custom TrustedHostMiddleware that skips WebSocket connections.
     app.add_middleware(
         WebsocketSafeTrustedHostMiddleware,
-        allowed_hosts=['*'
-        ]
+        allowed_hosts=['*']
     )
 
     # Use your custom session middleware if needed (make sure it also bypasses websockets)
