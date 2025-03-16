@@ -19,6 +19,7 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings  # Updated import for Pydantic settings
 
+from masyg_extractor.services import global_executor
 from masyg_extractor.services.helper import init_mail
 
 # -------------------------
@@ -155,7 +156,7 @@ async def connect(sid, environ, auth):
     print(f"Client connected: {sid}, Client ID: {client_id}")
     await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, room=client_id)
 
-    from services import global_executor
+
     global_executor.MAIN_LOOP = asyncio.get_running_loop()
 
 @sio.event
