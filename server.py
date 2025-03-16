@@ -184,19 +184,14 @@ from masyg_extractor.utils.extensions import sio
 
 @sio.event
 async def connect(sid, environ, auth):
-    # Extract query string parameters.
     scope = environ.get("asgi.scope", {})
     query_string = scope.get("query_string", b"").decode()
+    print("Received query string:", query_string)
     query_params = urllib.parse.parse_qs(query_string)
     client_id = query_params.get('clientId', ['Guest'])[0]
-
+    print(f"Connecting client: {client_id}, SID: {sid}")
     await sio.enter_room(sid, client_id)
-    print(f"*************{client_id}**********************")
-
-    print(f"Client connected: {sid}, Client ID: {client_id}")
     await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, room=client_id)
-
-
     global_executor.MAIN_LOOP = asyncio.get_running_loop()
 
 @sio.event
