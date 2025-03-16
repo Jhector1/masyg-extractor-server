@@ -8,6 +8,8 @@ Run with an ASGI server such as uvicorn:
 
 import os
 import logging
+from typing import Optional
+
 import redis
 import stripe
 import asyncio
@@ -36,7 +38,8 @@ class Settings(BaseSettings):
     secret_key: str = "BAD_SECRET_KEY"
     redis_url: str = "redis://127.0.0.1:6379"
     client_url: str = "http://localhost:3000"
-    server_url: str = None  # Optional; set if needed
+    server_url: Optional[str] = None
+    # Optional; set if needed
     MASYG_EXTRACTOR_STRIPE_SECRET_KEY: str = Field("", env="MASYG_EXTRACTOR_STRIPE_SECRET_KEY")
 
     server_port: int = 5000
@@ -89,11 +92,26 @@ class ConditionalHTTPSRedirectMiddleware(BaseHTTPMiddleware):
 
 # Then add this middleware in production:
 if ENV == "production":
+    # Conditional HTTPS redirect (bypasses websockets)
     app.add_middleware(ConditionalHTTPSRedirectMiddleware)
 
-# if ENV == "production":
-#     from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
-#     app.add_middleware(HTTPSRedirectMiddleware)
+    # Optionally restrict allowed hosts
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=[
+            "preview.masyglink.com", "www.preview.masyglink.com",
+            "extractor.masyglink.com", "www.extractor.masyglink.com"
+        ]
+    )
+
+    # Add session middleware (cookie-based)
+    from starlette.middleware.sessions import SessionMiddleware
+
+    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+
+    # Set up your Redis connection for sessions (or other uses)
     app.state.session_redis = redis.from_url(settings.redis_url)
 else:
     app.state.session_redis = None
