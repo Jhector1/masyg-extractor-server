@@ -6,7 +6,7 @@ from PIL import Image
 
 # Import your app and override dependencies as needed.
 # Adjust the import based on your project structure.
-from server import app  # or "from masyg_extractor.server import app" if that's your entry point
+from masyg_extractor.server import app  # or "from masyg_extractor.server import app" if that's your entry point
 from masyg_extractor.routes.data_extractor_routes import get_firebase_user
 
 

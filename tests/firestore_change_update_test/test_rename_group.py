@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from server import app  # your FastAPI app
-from masyg_extractor.services.firestore_helpers import get_firestore_client
+from masyg_extractor.server import app  # your FastAPI app
+from masyg_extractor.services.firestore_helpers import get_firestore_client, document_get, document_update
 from masyg_extractor.services.dependencies import get_firebase_user
 
 # ----- Fake Firestore Implementation -----
