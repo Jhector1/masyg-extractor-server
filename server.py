@@ -136,7 +136,7 @@ if ENV == "production":
     # Conditional HTTPS redirect (bypasses websockets)
     # from starlette.middleware.sessions import SessionMiddleware
     #
-    # app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
     # app.add_middleware(BaseHTTPMiddleware)
     #
     # # Use custom TrustedHostMiddleware that skips WebSocket connections.
