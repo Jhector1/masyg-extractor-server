@@ -129,7 +129,9 @@ if ENV == "production":
     app.add_middleware(
         WebsocketSafeTrustedHostMiddleware,
         allowed_hosts=[
-            "api-preview.masyglink.com",  # Add this line
+            "api-preview.masyglink.com",
+            "api-preview.up.railway.app",  # Railway's internal host
+            "*.masyglink.com",  # Wildcard for subdomains
             "preview.masyglink.com",
             "www.preview.masyglink.com",
             "extractor.masyglink.com",
