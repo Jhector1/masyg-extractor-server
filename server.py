@@ -132,7 +132,7 @@ if ENV == "production":
 
     # Use custom TrustedHostMiddleware that skips WebSocket connections.
     app.add_middleware(
-        WebsocketSafeTrustedHostMiddleware,
+        TrustedHostMiddleware,
         allowed_hosts=['*']
     )
 
@@ -141,7 +141,7 @@ if ENV == "production":
     # Here, we assume SessionMiddleware is already handled properly.
     from starlette.middleware.sessions import SessionMiddleware
 
-    app.add_middleware(WebsocketSafeSessionMiddleware, secret_key=settings.secret_key)
+    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 
     # Set up Redis connection for sessions (or other uses)
     app.state.session_redis = redis.from_url(settings.redis_url)
