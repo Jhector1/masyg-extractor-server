@@ -35,17 +35,17 @@ print("Environment:", ENV)
 # Define configuration with Pydantic Settings (allowing extra keys)
 # -------------------------
 class Settings(BaseSettings):
-    secret_key: str = "BAD_SECRET_KEY"
-    redis_url: str = "redis://127.0.0.1:6379"
-    client_url: str = "http://localhost:3000"
-    server_url: Optional[str] = None
+    secret_key: str =Field("", env="SECRET_KEY")
+    redis_url: str =Field("", env="REDIS_URL")
+    client_url: str = Field("", env="CLIENT URL")
+    server_url: str = Field("", env="MASYG_EXTRACTOR_STRIPE_SECRET_KEY")
     # Optional; set if needed
     MASYG_EXTRACTOR_STRIPE_SECRET_KEY: str = Field("", env="MASYG_EXTRACTOR_STRIPE_SECRET_KEY")
 
     server_port: int = 5000
 
     class Config:
-        env_file = "masyg_extractor/.env"
+        env_file = ".env"
         extra = "ignore"  # Ignore extra environment variables
 
 @lru_cache()
@@ -65,8 +65,8 @@ firebase_init()
 # -------------------------
 from fastapi import FastAPI
 app = FastAPI()
-from starlette.middleware.sessions import SessionMiddleware
-app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+# from starlette.middleware.sessions import SessionMiddleware
+# app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 init_mail(app)
 # -------------------------
 # (Optional) Add production security middleware.
@@ -133,7 +133,9 @@ if ENV == "production":
     app.state.session_redis = redis.from_url(settings.redis_url)
 else:
     app.state.session_redis = None
-
+print('redisurl',settings.redis_url)
+print('server url',settings.server_url)
+print('client url',settings.client_url)
 # -------------------------
 # Set up CORS middleware.
 # -------------------------
