@@ -72,18 +72,30 @@ init_mail(app)
 # (Optional) Add production security middleware.
 # -------------------------
 
+from fastapi.middleware.cors import CORSMiddleware
+
+origins = [settings.client_url, "http://localhost:3000"] if settings.client_url else ["http://localhost:3000"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import RedirectResponse
 
 
 class ConditionalHTTPSRedirectMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        # If this is a websocket connection, bypass redirection.
         if request.scope["type"] == "websocket":
+            print("WebSocket connection detected, bypassing HTTPS redirect")
             return await call_next(request)
 
-        # Check if request is not secure (HTTP)
         if request.url.scheme != "https":
+            print(f"Redirecting HTTP request to HTTPS: {request.url}")
             url = request.url.replace(scheme="https")
             return RedirectResponse(url)
 
@@ -141,16 +153,7 @@ print('client url',settings.client_url)
 # -------------------------
 # Set up CORS middleware.
 # -------------------------
-from fastapi.middleware.cors import CORSMiddleware
 
-origins = [settings.client_url, "http://localhost:3000"] if settings.client_url else ["http://localhost:3000"]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # -------------------------
 # Initialize Stripe.
