@@ -19,10 +19,13 @@ WORKDIR /app
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Download spaCy's English model
+RUN python -m spacy download en_core_web_sm
+
 # Copy the rest of your application code.
 COPY . /app/
 
-# Expose the port FAST_API will run on (this is internal to the container).
+# Expose the port Flask will run on (this is internal to the container).
 EXPOSE 5000
 
 # Command to run the ASGI application using uvicorn.
