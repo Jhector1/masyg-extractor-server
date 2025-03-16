@@ -129,8 +129,11 @@ if ENV == "production":
     app.add_middleware(
         WebsocketSafeTrustedHostMiddleware,
         allowed_hosts=[
-            "preview.masyglink.com", "www.preview.masyglink.com",
-            "extractor.masyglink.com", "www.extractor.masyglink.com"
+            "api-preview.masyglink.com",  # Add this line
+            "preview.masyglink.com",
+            "www.preview.masyglink.com",
+            "extractor.masyglink.com",
+            "www.extractor.masyglink.com"
         ]
     )
 
