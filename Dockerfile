@@ -30,4 +30,4 @@ EXPOSE 5000
 
 # Command to run the ASGI application using uvicorn.
 # This uses a shell command so that the $PORT environment variable is expanded.
-CMD ["sh", "-c", "uvicorn server:asgi_app --host 0.0.0.0 --port ${PORT:-5000}"]
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-5000}"]
