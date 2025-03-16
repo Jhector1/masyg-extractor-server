@@ -37,8 +37,8 @@ print("Environment:", ENV)
 class Settings(BaseSettings):
     secret_key: str =Field("", env="SECRET_KEY")
     redis_url: str =Field("", env="REDIS_URL")
-    client_url: str = Field("", env="CLIENT URL")
-    server_url: str = Field("", env="MASYG_EXTRACTOR_STRIPE_SECRET_KEY")
+    client_url: str = Field("", env="CLIENT_URL")
+    server_url: str = Field("", env="SERVER_URL")
     # Optional; set if needed
     MASYG_EXTRACTOR_STRIPE_SECRET_KEY: str = Field("", env="MASYG_EXTRACTOR_STRIPE_SECRET_KEY")
 
@@ -127,11 +127,13 @@ if ENV == "production":
     # Here, we assume SessionMiddleware is already handled properly.
     from starlette.middleware.sessions import SessionMiddleware
 
-    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+    app.add_middleware(WebsocketSafeSessionMiddleware, secret_key=settings.secret_key)
 
     # Set up Redis connection for sessions (or other uses)
     app.state.session_redis = redis.from_url(settings.redis_url)
 else:
+    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+
     app.state.session_redis = None
 print('redisurl',settings.redis_url)
 print('server url',settings.server_url)
