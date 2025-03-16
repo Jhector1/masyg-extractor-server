@@ -102,12 +102,17 @@ class ConditionalHTTPSRedirectMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+
 class WebsocketSafeTrustedHostMiddleware(TrustedHostMiddleware):
     async def __call__(self, scope, receive, send):
-        # Bypass TrustedHostMiddleware for WebSocket connections.
-        if scope["type"] == "websocket":
-            return await self.app(scope, receive, send)
-        # Otherwise, proceed as normal.
+        # Bypass host validation for WebSocket handshake requests
+        if scope["type"] == "http":
+            headers = dict(scope["headers"])
+            upgrade_header = headers.get(b"upgrade", b"").decode().lower()
+            if upgrade_header == "websocket":
+                return await self.app(scope, receive, send)
+
+        # Proceed with host validation for other HTTP requests
         return await super().__call__(scope, receive, send)
 
 from starlette.middleware.sessions import SessionMiddleware
