@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -m spacy download en_core_web_sm
 
 # Copy the rest of your application code.
-COPY . /app/
+COPY masyg_extractor /app/
 
 # Expose the port Flask will run on (this is internal to the container).
 EXPOSE 5000
