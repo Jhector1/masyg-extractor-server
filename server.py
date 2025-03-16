@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     server_port: int = 5000
 
     class Config:
-        env_file = ".env"
+        env_file = "masyg_extractor/.env"
         extra = "ignore"  # Ignore extra environment variables
 
 @lru_cache()
