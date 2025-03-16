@@ -67,9 +67,32 @@ init_mail(app)
 # -------------------------
 # (Optional) Add production security middleware.
 # -------------------------
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import RedirectResponse
+
+
+class ConditionalHTTPSRedirectMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        # If this is a websocket connection, bypass redirection.
+        if request.scope["type"] == "websocket":
+            return await call_next(request)
+
+        # Check if request is not secure (HTTP)
+        if request.url.scheme != "https":
+            url = request.url.replace(scheme="https")
+            return RedirectResponse(url)
+
+        return await call_next(request)
+
+
+# Then add this middleware in production:
 if ENV == "production":
-    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
-    app.add_middleware(HTTPSRedirectMiddleware)
+    app.add_middleware(ConditionalHTTPSRedirectMiddleware)
+
+# if ENV == "production":
+#     from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+#     app.add_middleware(HTTPSRedirectMiddleware)
     app.state.session_redis = redis.from_url(settings.redis_url)
 else:
     app.state.session_redis = None
