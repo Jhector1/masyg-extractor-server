@@ -133,14 +133,7 @@ if ENV == "production":
     # Use custom TrustedHostMiddleware that skips WebSocket connections.
     app.add_middleware(
         WebsocketSafeTrustedHostMiddleware,
-        allowed_hosts=[
-            "api-preview.masyglink.com",
-            "api-preview.up.railway.app",  # Railway's internal host
-            "*.masyglink.com",  # Wildcard for subdomains
-            "preview.masyglink.com",
-            "www.preview.masyglink.com",
-            "extractor.masyglink.com",
-            "www.extractor.masyglink.com"
+        allowed_hosts=['*'
         ]
     )
 
