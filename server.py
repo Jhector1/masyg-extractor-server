@@ -20,6 +20,8 @@ from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings  # Updated import for Pydantic settings
+from starlette.middleware import Middleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from masyg_extractor.services import global_executor
 from masyg_extractor.services.helper import init_mail
@@ -64,7 +66,11 @@ firebase_init()
 # Create FastAPI app.
 # -------------------------
 from fastapi import FastAPI
-app = FastAPI()
+app =app = FastAPI(middleware=[
+    Middleware(ProxyHeadersMiddleware, trusted_hosts="*")  # Required for Railway
+])
+
+
 # from starlette.middleware.sessions import SessionMiddleware
 # app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 init_mail(app)
@@ -128,16 +134,16 @@ app.add_middleware(
 )
 if ENV == "production":
     # Conditional HTTPS redirect (bypasses websockets)
-    from starlette.middleware.sessions import SessionMiddleware
-
-    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
-    app.add_middleware(BaseHTTPMiddleware)
-
-    # Use custom TrustedHostMiddleware that skips WebSocket connections.
-    app.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=['*']
-    )
+    # from starlette.middleware.sessions import SessionMiddleware
+    #
+    # app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+    # app.add_middleware(BaseHTTPMiddleware)
+    #
+    # # Use custom TrustedHostMiddleware that skips WebSocket connections.
+    # app.add_middleware(
+    #     TrustedHostMiddleware,
+    #     allowed_hosts=['*']
+    # )
 
     # Use your custom session middleware if needed (make sure it also bypasses websockets)
     # For example, if you haven't already, subclass SessionMiddleware similarly.
