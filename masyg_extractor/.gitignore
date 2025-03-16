@@ -1,0 +1,48 @@
+# Byte-compiled Python files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables and configuration
+.env
+*.env
+
+# FAST_API secret key or config files
+instance/
+service_account_base64.txt
+
+# Virtual environments
+venv/
+ENV/
+*.venv
+*.node_modules
+practest.py
+# Logs
+*.log
+logs/
+local.crt
+local.key
+# Database files
+*.sqlite3
+*.db
+*.db-journal
+
+# Cache and temporary files
+*.pid
+*.pycache/
+*.pyo
+
+# Static and media files (if generated dynamically)
+staticfiles/
+media/
+
+# IDE-specific files
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Dependency management
+*.lock
