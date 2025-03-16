@@ -30,7 +30,7 @@ from pdf2image import convert_from_bytes
 import pytesseract
 import logging
 
-import fitz  # PyMuPDF
+FAST_API # PyMuPDF
 
 from masyg_extractor.utils.tool import clean_text
 
@@ -163,9 +163,9 @@ async def extract_text_with_ocr_space(uploaded_file, api_key='K84148755688957'):
 
 import aiofiles
 import io
-import fitz  # PyMuPDF
+ # PyMuPDF
 
-import fitz  # PyMuPDF
+ # PyMuPDF
 import logging
 
 def extract_text_from_pdf(file):

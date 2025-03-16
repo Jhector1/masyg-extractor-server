@@ -4,7 +4,7 @@ import os
 import logging
 import requests
 import camelot
-import fitz  # PyMuPDF
+ # PyMuPDF
 import pytesseract
 from pytesseract import image_to_string
 from google.cloud import vision
