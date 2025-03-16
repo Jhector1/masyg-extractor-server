@@ -39,3 +39,5 @@ blinker==1.5                 # Required by fastapi-mail
 fastapi-mail==1.4.2
 google-api-core[grpc]==1.34.1  # Constraint to resolve dependency conflict
 itsdangerous==2.2.0
+python-multipart==0.0.5
+
