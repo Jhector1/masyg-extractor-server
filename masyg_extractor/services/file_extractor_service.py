@@ -30,7 +30,7 @@ from pdf2image import convert_from_bytes
 import pytesseract
 import logging
 
-FAST_API # PyMuPDF
+ # PyMuPDF
 
 from masyg_extractor.utils.tool import clean_text
 
