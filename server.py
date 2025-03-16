@@ -128,7 +128,10 @@ app.add_middleware(
 )
 if ENV == "production":
     # Conditional HTTPS redirect (bypasses websockets)
-    app.add_middleware(ConditionalHTTPSRedirectMiddleware)
+    from starlette.middleware.sessions import SessionMiddleware
+
+    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+    app.add_middleware(BaseHTTPMiddleware)
 
     # Use custom TrustedHostMiddleware that skips WebSocket connections.
     app.add_middleware(
@@ -139,9 +142,7 @@ if ENV == "production":
     # Use your custom session middleware if needed (make sure it also bypasses websockets)
     # For example, if you haven't already, subclass SessionMiddleware similarly.
     # Here, we assume SessionMiddleware is already handled properly.
-    from starlette.middleware.sessions import SessionMiddleware
 
-    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 
     # Set up Redis connection for sessions (or other uses)
     app.state.session_redis = redis.from_url(settings.redis_url)
