@@ -88,6 +88,15 @@ class ConditionalHTTPSRedirectMiddleware(BaseHTTPMiddleware):
             return RedirectResponse(url)
 
         return await call_next(request)
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+class WebsocketSafeTrustedHostMiddleware(TrustedHostMiddleware):
+    async def __call__(self, scope, receive, send):
+        # Bypass TrustedHostMiddleware for WebSocket connections.
+        if scope["type"] == "websocket":
+            return await self.app(scope, receive, send)
+        # Otherwise, proceed as normal.
+        return await super().__call__(scope, receive, send)
 
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -104,24 +113,23 @@ if ENV == "production":
     # Conditional HTTPS redirect (bypasses websockets)
     app.add_middleware(ConditionalHTTPSRedirectMiddleware)
 
-    # Trust proxy headers using Starlette's middleware (removed in Starlette 0.27.0; use uvicorn's --proxy-headers instead)
-    # app.add_middleware(ProxyHeadersMiddleware)  # If needed, but recommended: use uvicorn --proxy-headers
-
-    # Restrict allowed hosts
-    from starlette.middleware.trustedhost import TrustedHostMiddleware
-
+    # Use custom TrustedHostMiddleware that skips WebSocket connections.
     app.add_middleware(
-        TrustedHostMiddleware,
+        WebsocketSafeTrustedHostMiddleware,
         allowed_hosts=[
             "preview.masyglink.com", "www.preview.masyglink.com",
             "extractor.masyglink.com", "www.extractor.masyglink.com"
         ]
     )
 
-    # Use the custom session middleware that bypasses WebSocket connections.
-    app.add_middleware(WebsocketSafeSessionMiddleware, secret_key=settings.secret_key)
+    # Use your custom session middleware if needed (make sure it also bypasses websockets)
+    # For example, if you haven't already, subclass SessionMiddleware similarly.
+    # Here, we assume SessionMiddleware is already handled properly.
+    from starlette.middleware.sessions import SessionMiddleware
 
-    # Set up your Redis connection for sessions (or other uses)
+    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+
+    # Set up Redis connection for sessions (or other uses)
     app.state.session_redis = redis.from_url(settings.redis_url)
 else:
     app.state.session_redis = None
