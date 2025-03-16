@@ -89,13 +89,25 @@ class ConditionalHTTPSRedirectMiddleware(BaseHTTPMiddleware):
 
         return await call_next(request)
 
+from starlette.middleware.sessions import SessionMiddleware
 
-# Then add this middleware in production:
+class WebsocketSafeSessionMiddleware(SessionMiddleware):
+    async def __call__(self, scope, receive, send):
+        # If this is a websocket connection, bypass the session middleware.
+        if scope["type"] == "websocket":
+            return await self.app(scope, receive, send)
+        # Otherwise, handle as usual.
+        return await super().__call__(scope, receive, send)
+
+
 if ENV == "production":
     # Conditional HTTPS redirect (bypasses websockets)
     app.add_middleware(ConditionalHTTPSRedirectMiddleware)
 
-    # Optionally restrict allowed hosts
+    # Trust proxy headers using Starlette's middleware (removed in Starlette 0.27.0; use uvicorn's --proxy-headers instead)
+    # app.add_middleware(ProxyHeadersMiddleware)  # If needed, but recommended: use uvicorn --proxy-headers
+
+    # Restrict allowed hosts
     from starlette.middleware.trustedhost import TrustedHostMiddleware
 
     app.add_middleware(
@@ -106,10 +118,8 @@ if ENV == "production":
         ]
     )
 
-    # Add session middleware (cookie-based)
-    from starlette.middleware.sessions import SessionMiddleware
-
-    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+    # Use the custom session middleware that bypasses WebSocket connections.
+    app.add_middleware(WebsocketSafeSessionMiddleware, secret_key=settings.secret_key)
 
     # Set up your Redis connection for sessions (or other uses)
     app.state.session_redis = redis.from_url(settings.redis_url)
