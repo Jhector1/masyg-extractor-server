@@ -4,7 +4,7 @@ import hashlib
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 from firebase_admin import db
-from masyg_extractor.services.file_extractor_service import *  # if needed
+# from masyg_extractor.services.file_extractor_service import *  # if needed
 
 router = APIRouter()
 
