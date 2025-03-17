@@ -9,14 +9,15 @@ Run with an ASGI server such as uvicorn:
 
 import os
 import logging
-import redis
 import stripe
 import asyncio
-import concurrent.futures
+
 import urllib.parse
-from datetime import datetime
 from dotenv import load_dotenv, find_dotenv
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+from masyg_extractor.services.helper import init_mail
+from masyg_extractor.utils.extensions import sio
 
 # Load environment variables.
 load_dotenv(find_dotenv())
@@ -27,7 +28,7 @@ print("Environment:", ENV)
 from masyg_extractor.firebase.firebase_init import firebase_init
 firebase_init()
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -35,6 +36,7 @@ from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 # Create FastAPI app.
 app = FastAPI()
 secret_key = os.getenv('SECRET_KEY', 'BAD_SECRET_KEY')
+init_mail(app)
 if ENV == "production":
 
     # Starlette’s SessionMiddleware uses a cookie-based session.
@@ -96,6 +98,8 @@ register_routers(app)
 
 # Set up logging.
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG if ENV == "development" else logging.INFO)
+
 # Uncomment and adjust logging as needed.
 # if ENV == "development":
 #     logger.setLevel(logging.DEBUG)
@@ -111,7 +115,7 @@ logger = logging.getLogger(__name__)
 import socketio
 
 # Create an async Socket.IO server with allowed CORS origins.
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=origins)
+# sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=origins)
 
 # --- Socket.IO events ---
 @sio.event

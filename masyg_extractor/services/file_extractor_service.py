@@ -323,7 +323,7 @@ def extract_json_from_code_block(text):
             logging.error("No JSON content found in the GPT response.")
             return None
     try:
-        print(json_str)
+        # print(json_str)
         return json.loads(json_str)
     except Exception as e:
         logging.error(f"Failed to parse JSON: {e}")
@@ -480,18 +480,18 @@ async def process_text_with_gpt(pdf_text):
     """
 
     pdf_text= clean_text(pdf_text)
-    print(pdf_text)
+    # print(pdf_text)
     if len(pdf_text) <=0:
         return None
     if len(pdf_text) <= 1500:
-        print(pdf_text)
+        # print(pdf_text)
         result = await process_chunk(pdf_text)
         # print(result)
         return result
 
     # Split text into chunks of 3500 characters
     chunks = [pdf_text[i:i + 1500] for i in range(0, len(pdf_text), 1500)]
-    print(chunks)
+    # print(chunks)
     tasks = [process_chunk(chunk) for chunk in chunks]
     results = await asyncio.gather(*tasks)
     # print(results)
@@ -503,7 +503,7 @@ async def process_text_with_gpt(pdf_text):
 
     # Merge results (assume vendor_name, date, and tax are consistent)
     combined_result = results[0]
-    print(combined_result)
+    # print(combined_result)
     for result in results[1:]:
         if "line_items" in result:
             combined_result["line_items"].extend(result.get("line_items", []))
