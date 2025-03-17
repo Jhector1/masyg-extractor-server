@@ -5,7 +5,6 @@ import spacy
 from transformers import pipeline
 import openai
 
-
 # import pdfplumber
 import pandas as pd
 
