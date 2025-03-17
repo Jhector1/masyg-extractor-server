@@ -11,7 +11,6 @@ import pandas as pd
 import os
 from werkzeug.utils import secure_filename
 import camelot
-from fitz import frontend
 from pdf2image import convert_from_path
 from google.cloud import vision
 from io import BytesIO
