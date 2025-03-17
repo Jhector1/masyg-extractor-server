@@ -1,11 +1,13 @@
 # Use a lightweight Python image
 FROM python:3.12-slim
 
-# Install system dependencies, including Ghostscript, Poppler, and Tesseract OCR if needed.
+# Install system dependencies, including Ghostscript, Poppler, Tesseract OCR, SWIG, and build tools.
 RUN apt-get update && apt-get install -y \
     ghostscript \
     tesseract-ocr \
     poppler-utils \
+    swig \
+    build-essential \
  && apt-get clean
 
 # Set environment variables
