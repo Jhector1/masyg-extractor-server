@@ -1,6 +1,6 @@
 import asyncio
 
-# import fitz
+import fitz
 import spacy
 from transformers import pipeline
 import openai
@@ -161,22 +161,22 @@ def extract_text_from_pdf(file):
     :param file: A synchronous file-like object (e.g. BytesIO) containing the PDF data.
     :return: The extracted text as a single string.
     """
-    # try:
-    #     # Since 'file' is a BytesIO, its read() method is synchronous.
-    #     pdf_data = file.read()
-    #     file.seek(0)  # Reset pointer for potential reuse.
-    #     with fitz.open(stream=pdf_data, filetype="pdf") as doc:
-    #         all_text = []
-    #         for page_index, page in enumerate(doc, start=1):
-    #             page_text = page.get_text()
-    #             if page_text:
-    #                 all_text.append(page_text)
-    #             else:
-    #                 logging.warning(f"No text found on page {page_index} of {getattr(file, 'filename', 'unknown')}")
-    #         return "\n".join(all_text)
-    # except Exception as e:
-    #     logging.error(f"Error extracting text from PDF: {e}")
-    return ""
+    try:
+        # Since 'file' is a BytesIO, its read() method is synchronous.
+        pdf_data = file.read()
+        file.seek(0)  # Reset pointer for potential reuse.
+        with fitz.open(stream=pdf_data, filetype="pdf") as doc:
+            all_text = []
+            for page_index, page in enumerate(doc, start=1):
+                page_text = page.get_text()
+                if page_text:
+                    all_text.append(page_text)
+                else:
+                    logging.warning(f"No text found on page {page_index} of {getattr(file, 'filename', 'unknown')}")
+            return "\n".join(all_text)
+    except Exception as e:
+        logging.error(f"Error extracting text from PDF: {e}")
+        return ""
 
 
 # def _extract_text_from_pdf_sync(file_obj, filename):
