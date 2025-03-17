@@ -12,7 +12,7 @@ import pandas as pd
 import os
 from werkzeug.utils import secure_filename
 import camelot
-
+from fitz import frontend
 from pdf2image import convert_from_path
 from google.cloud import vision
 from io import BytesIO
@@ -181,23 +181,23 @@ def extract_text_from_pdf(file):
         return ""
 
 
-def _extract_text_from_pdf_sync(file_obj, filename):
-    try:
-        pdf_data = file_obj.read()
-        file_obj.seek(0)
-        with fitz.open(stream=pdf_data, filetype="pdf") as doc:
-            all_text = []
-            for page_index, page in enumerate(doc, start=1):
-                page_text = page.get_text()
-                if page_text:
-                    all_text.append(page_text)
-                else:
-                    logging.warning(f"No text found on page {page_index} of {filename}")
-            return "\n".join(all_text)
-    except Exception as e:
-        logging.error(f"Error extracting text from PDF {filename}: {e}")
-        return ""
-
+# def _extract_text_from_pdf_sync(file_obj, filename):
+#     try:
+#         pdf_data = file_obj.read()
+#         file_obj.seek(0)
+#         with fitz.open(stream=pdf_data, filetype="pdf") as doc:
+#             all_text = []
+#             for page_index, page in enumerate(doc, start=1):
+#                 page_text = page.get_text()
+#                 if page_text:
+#                     all_text.append(page_text)
+#                 else:
+#                     logging.warning(f"No text found on page {page_index} of {filename}")
+#             return "\n".join(all_text)
+#     except Exception as e:
+#         logging.error(f"Error extracting text from PDF {filename}: {e}")
+#         return ""
+#
 
 
 
