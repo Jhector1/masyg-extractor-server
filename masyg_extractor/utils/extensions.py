@@ -29,7 +29,7 @@ print('origins allowed', ALLOWED_ORIGINS)
 # Create the Socket.IO AsyncServer instance
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins='*',
+    cors_allowed_origins=ALLOWED_ORIGINS,
     ping_timeout=60000,
     ping_interval=30000,
     logger=True,
