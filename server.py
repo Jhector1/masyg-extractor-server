@@ -223,4 +223,4 @@ if __name__ == "__main__":
     import uvicorn
     server_port = settings.server_port
     print(f"Starting ASGI server on port {server_port}")
-    uvicorn.run("server:asgi_app", host="0.0.0.0", port=server_port, reload=(ENV == "development"))
+    uvicorn.run("server:asgi_app", host="0.0.0.0", port=server_port, reload=(ENV == "development") ,proxy_headers=True)
