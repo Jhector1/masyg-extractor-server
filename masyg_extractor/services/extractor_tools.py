@@ -4,6 +4,7 @@ import os
 import logging
 
 import fitz
+
 import requests
 import camelot
  # PyMuPDF
