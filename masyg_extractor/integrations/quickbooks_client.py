@@ -1,8 +1,7 @@
 import requests
 from fastapi import Request
 from typing import Optional, Dict, Any
-from masyg_extractor.services.my_log import logger, send_log
-import asyncio
+from masyg_extractor.services.my_log import logger
 QB_SANDBOX_URL = "https://sandbox-quickbooks.api.intuit.com/v3/company"
 
 def quickbooks_request(

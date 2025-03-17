@@ -1,15 +1,14 @@
 import asyncio
 import io
-import inspect
+
 import json
-import logging
 from typing import Tuple, Any, List, Dict
 
 from firebase_admin import firestore
 from masyg_extractor.services.my_log import send_log, logger
 from masyg_extractor.utils.helper import FakeUploadFile
 from masyg_extractor.utils.tool import remove_sensitive_data
-from masyg_extractor.services.image_extractor_service import compress_file_blob, extract_text_from_image
+from masyg_extractor.services.image_extractor_service import extract_text_from_image
 from masyg_extractor.services.file_extractor_service import (
     extract_text_from_pdf,
     extract_text_from_pdf_image,

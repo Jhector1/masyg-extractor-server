@@ -1,7 +1,6 @@
 
 import pytesseract
 
-import io
 
 import logging
 

@@ -1,24 +1,14 @@
 import asyncio
-import re
-import time
-from pathlib import Path
-import logging
 
+import fitz
 import spacy
-from fastapi import UploadFile
 from transformers import pipeline
-import PyPDF2
 import openai
-import json
-import boto3
-from functools import reduce
+
 
 # import pdfplumber
 import pandas as pd
-import os
-import requests
-import logging
-import logging
+
 import os
 from werkzeug.utils import secure_filename
 import camelot
@@ -161,8 +151,6 @@ async def extract_text_with_ocr_space(uploaded_file, api_key='K84148755688957'):
 #     logging.error(f"Unexpected error during OCR extraction: {e}")
 #     return ""
 
-import aiofiles
-import io
  # PyMuPDF
 
  # PyMuPDF

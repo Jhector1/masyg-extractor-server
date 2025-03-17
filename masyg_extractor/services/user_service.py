@@ -1,4 +1,4 @@
-from fastapi import Request, HTTPException
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from werkzeug.security import generate_password_hash, check_password_hash
 import uuid

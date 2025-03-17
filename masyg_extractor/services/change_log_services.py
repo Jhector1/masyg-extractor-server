@@ -1,5 +1,4 @@
-from fastapi import APIRouter, Request, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter
 from re import compile
 from firebase_admin import firestore as admin_fs
 from masyg_extractor.services.firestore_helpers import (
@@ -9,8 +8,6 @@ from masyg_extractor.services.firestore_helpers import (
     document_update,
     document_delete,
 )
-from masyg_extractor.services.dependencies import get_firebase_user
-from masyg_extractor.services.my_log import send_log, logger
 
 router = APIRouter(prefix="/extractor")
 

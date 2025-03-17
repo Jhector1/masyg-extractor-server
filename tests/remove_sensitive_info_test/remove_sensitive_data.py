@@ -1,4 +1,3 @@
-import re
 import unittest
 
 from masyg_extractor.utils.tool import remove_sensitive_data

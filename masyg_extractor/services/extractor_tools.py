@@ -2,6 +2,8 @@ import re
 import io
 import os
 import logging
+
+import fitz
 import requests
 import camelot
  # PyMuPDF
@@ -10,14 +12,7 @@ from pytesseract import image_to_string
 from google.cloud import vision
 from pdf2image import convert_from_bytes
 from werkzeug.utils import secure_filename
-from pathlib import Path
-from transformers import pipeline
-import PyPDF2
-import openai
-import json
-import boto3
-from functools import reduce
-import pandas as pd
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

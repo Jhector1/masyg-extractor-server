@@ -1,226 +1,376 @@
-#!/usr/bin/env python
+
+# !/usr/bin/env python
 """
-Run the FastAPI app with python‑socketio’s native AsyncServer in ASGI mode.
+Run the FastAPI app with python-socketio’s native AsyncServer in ASGI mode.
 
 Run with an ASGI server such as uvicorn:
-    uvicorn server:asgi_app --host 0.0.0.0 --port 5000
+    uvicorn server:app --host 0.0.0.0 --port 5000
 """
 
 import os
 import logging
-from typing import Optional
-
 import redis
 import stripe
 import asyncio
+import concurrent.futures
 import urllib.parse
 from datetime import datetime
 from dotenv import load_dotenv, find_dotenv
-from functools import lru_cache
-
-from pydantic import Field
-from pydantic_settings import BaseSettings  # Updated import for Pydantic settings
-from starlette.middleware import Middleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from masyg_extractor.services import global_executor
-from masyg_extractor.services.helper import init_mail
-
-# -------------------------
-# Load environment variables
-# -------------------------
+# Load environment variables.
 load_dotenv(find_dotenv())
-ENV = os.getenv("FAST_API_ENV", "development").lower()
+ENV = os.getenv("FLASK_ENV", "development").lower()
 print("Environment:", ENV)
 
-# -------------------------
-# Define configuration with Pydantic Settings (allowing extra keys)
-# -------------------------
-class Settings(BaseSettings):
-    secret_key: str =Field("", env="SECRET_KEY")
-    redis_url: str =Field("", env="REDIS_URL")
-    client_url: str = Field("", env="CLIENT_URL")
-    server_url: str = Field("", env="SERVER_URL")
-    # Optional; set if needed
-    MASYG_EXTRACTOR_STRIPE_SECRET_KEY: str = Field("", env="MASYG_EXTRACTOR_STRIPE_SECRET_KEY")
-
-    server_port: int = 5000
-
-    class Config:
-        env_file = ".env"
-        extra = "ignore"  # Ignore extra environment variables
-
-@lru_cache()
-def get_settings():
-    return Settings()
-
-settings = get_settings()
-
-# -------------------------
 # Initialize Firebase early.
-# -------------------------
 from masyg_extractor.firebase.firebase_init import firebase_init
 firebase_init()
 
-# -------------------------
-# Create FastAPI app.
-# -------------------------
-from fastapi import FastAPI
-app =app = FastAPI(middleware=[
-    Middleware(ProxyHeadersMiddleware, trusted_hosts="*")  # Required for Railway
-])
-
-
-# from starlette.middleware.sessions import SessionMiddleware
-# app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
-init_mail(app)
-# -------------------------
-# (Optional) Add production security middleware.
-# -------------------------
-
-
-
-
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import RedirectResponse
-
-
-class ConditionalHTTPSRedirectMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        if request.scope["type"] == "websocket":
-            print("WebSocket connection detected, bypassing HTTPS redirect")
-            return await call_next(request)
-
-        if request.url.scheme != "https":
-            print(f"Redirecting HTTP request to HTTPS: {request.url}")
-            url = request.url.replace(scheme="https")
-            return RedirectResponse(url)
-
-        return await call_next(request)
-from starlette.middleware.trustedhost import TrustedHostMiddleware
-
-
-class WebsocketSafeTrustedHostMiddleware(TrustedHostMiddleware):
-    async def __call__(self, scope, receive, send):
-        # Bypass host validation for WebSocket handshake requests
-        if scope["type"] == "http":
-            headers = dict(scope["headers"])
-            upgrade_header = headers.get(b"upgrade", b"").decode().lower()
-            if upgrade_header == "websocket":
-                return await self.app(scope, receive, send)
-
-        # Proceed with host validation for other HTTP requests
-        return await super().__call__(scope, receive, send)
-
-from starlette.middleware.sessions import SessionMiddleware
-
-class WebsocketSafeSessionMiddleware(SessionMiddleware):
-    async def __call__(self, scope, receive, send):
-        # If this is a websocket connection, bypass the session middleware.
-        if scope["type"] == "websocket":
-            return await self.app(scope, receive, send)
-        # Otherwise, handle as usual.
-        return await super().__call__(scope, receive, send)
-
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
-origins = [settings.client_url, "http://localhost:3000"] if settings.client_url else ["http://localhost:3000"]
+# Create FastAPI app.
+app = FastAPI()
+secret_key = os.getenv('SECRET_KEY', 'BAD_SECRET_KEY')
+if ENV == "production":
+
+    # Starlette’s SessionMiddleware uses a cookie-based session.
+    # For a Redis-backed store you could integrate a third-party library.
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=secret_key,
+        same_site="lax",
+        https_only=True  # SESSION_COOKIE_SECURE=True
+    )
+
+    # Add middleware to fix proxy headers (similar to ProxyFix in Flask)
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+    # Force HTTPS redirection.
+    app.add_middleware(HTTPSRedirectMiddleware)
+
+    # Optionally set cookie domain based on SERVER_URL.
+    server_url = os.getenv('SERVER_URL')
+    if server_url:
+        # Custom middleware or response customization would be required
+        # to set SESSION_COOKIE_DOMAIN since SessionMiddleware doesn't expose that directly.
+        pass
+else:
+    app.add_middleware(SessionMiddleware, secret_key=secret_key)
+
+    # Load development configuration if needed.
+    pass
+
+# Set up CORS.
+origins = [os.getenv('CLIENT_URL'), "http://localhost:3000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-if ENV == "production":
-    # Conditional HTTPS redirect (bypasses websockets)
-    # from starlette.middleware.sessions import SessionMiddleware
-    #
-    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
-    # app.add_middleware(BaseHTTPMiddleware)
-    #
-    # # Use custom TrustedHostMiddleware that skips WebSocket connections.
-    # app.add_middleware(
-    #     TrustedHostMiddleware,
-    #     allowed_hosts=['*']
-    # )
 
-    # Use your custom session middleware if needed (make sure it also bypasses websockets)
-    # For example, if you haven't already, subclass SessionMiddleware similarly.
-    # Here, we assume SessionMiddleware is already handled properly.
+# For caching you could integrate a FastAPI caching library.
+# For now, this code omits a direct caching equivalent.
 
+# Talisman equivalent: You may want to add custom middleware or use libraries
+# to set secure headers as Talisman does in Flask.
+# (This example does not include an exact Talisman replacement.)
 
-    # Set up Redis connection for sessions (or other uses)
-    app.state.session_redis = redis.from_url(settings.redis_url)
-else:
-    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
-
-    app.state.session_redis = None
-print('redisurl',settings.redis_url)
-print('server url',settings.server_url)
-print('client url',settings.client_url)
-# -------------------------
-# Set up CORS middleware.
-# -------------------------
-
-
-# -------------------------
 # Initialize Stripe.
-# -------------------------
 stripe.set_app_info(
     'stripe-samples/checkout-single-subscription',
     version='0.0.1',
     url='https://github.com/stripe-samples/checkout-single-subscription'
 )
-stripe.api_key = settings.MASYG_EXTRACTOR_STRIPE_SECRET_KEY
-# print( settings.MASYG_EXTRACTOR_STRIPE_SECRET_KEY)
+stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
 
-# -------------------------
-# Register your routers (FastAPI’s equivalent of FAST_API blueprints).
-# -------------------------
-# Assuming you have a module `routes` with a function `register_routers(app)`
+# Register your routers (Flask blueprints equivalent).
+# Your register_routers function should import and include your routes.
 from masyg_extractor.routes import register_routers
 register_routers(app)
 
-# -------------------------
 # Set up logging.
-# -------------------------
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG if ENV == "development" else logging.INFO)
-# (Additional logging handlers can be added as needed.)
+# Uncomment and adjust logging as needed.
+# if ENV == "development":
+#     logger.setLevel(logging.DEBUG)
+#     console_handler = logging.StreamHandler()
+#     console_handler.setLevel(logging.DEBUG)
+#     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+#     console_handler.setFormatter(formatter)
+#     logger.addHandler(console_handler)
+# else:
+#     logger.setLevel(logging.INFO)
 
-# -------------------------
-# Import Socket.IO instance and define events.
-# -------------------------
-from masyg_extractor.utils.extensions import sio
+# Set up Socket.IO.
+import socketio
 
+# Create an async Socket.IO server with allowed CORS origins.
+sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=origins)
+
+# --- Socket.IO events ---
 @sio.event
 async def connect(sid, environ, auth):
-    scope = environ.get("asgi.scope", {})
-    query_string = scope.get("query_string", b"").decode()
-    print("Received query string:", query_string)
+    # Extract query string parameters.
+    # In FastAPI the query string is available in the ASGI scope.
+    query_string = environ.get("asgi.scope", {}).get("query_string", b"").decode()
     query_params = urllib.parse.parse_qs(query_string)
     client_id = query_params.get('clientId', ['Guest'])[0]
-    print(f"Connecting client: {client_id}, SID: {sid}")
+
     await sio.enter_room(sid, client_id)
+    print(f"Client connected: {sid}, Client ID: {client_id}")
     await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, room=client_id)
+
+    # Update the global event loop if needed.
+    from masyg_extractor.services import global_executor
     global_executor.MAIN_LOOP = asyncio.get_running_loop()
 
 @sio.event
 async def disconnect(sid):
     print(f"Client disconnected: {sid}")
 
-# -------------------------
-# ASGI setup: Combine FastAPI and Socket.IO.
-# -------------------------
-from socketio import ASGIApp
-asgi_app = ASGIApp(sio, app)
+# --- ASGI integration ---
+# Wrap the FastAPI app with Socket.IO’s ASGIApp.
+# This combines the Socket.IO server with your FastAPI routes.
+app = socketio.ASGIApp(sio, other_asgi_app=app)
 
-# -------------------------
-# Entry point.
-# -------------------------
 if __name__ == "__main__":
     import uvicorn
-    server_port = settings.server_port
+    server_port = int(os.getenv("SERVER_PORT", 5000))
     print(f"Starting ASGI server on port {server_port}")
-    uvicorn.run("server:asgi_app", host="0.0.0.0", port=server_port, reload=(ENV == "development") ,proxy_headers=True)
+    if ENV == "development":
+        uvicorn.run("server:app", host="0.0.0.0", port=server_port, reload=True)
+    else:
+        uvicorn.run("server:app", host="0.0.0.0", port=server_port)
+
+
+
+# #!/usr/bin/env python
+# """
+# Run the FastAPI app with python‑socketio’s native AsyncServer in ASGI mode.
+#
+# Run with an ASGI server such as uvicorn:
+#     uvicorn server:asgi_app --host 0.0.0.0 --port 5000
+# """
+#
+# import os
+# import logging
+#
+# import redis
+# import stripe
+# import asyncio
+# import urllib.parse
+# from dotenv import load_dotenv, find_dotenv
+# from functools import lru_cache
+#
+# from pydantic import Field
+# from pydantic_settings import BaseSettings  # Updated import for Pydantic settings
+# from starlette.middleware import Middleware
+# from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+#
+# from masyg_extractor.services import global_executor
+# from masyg_extractor.services.helper import init_mail
+#
+# # -------------------------
+# # Load environment variables
+# # -------------------------
+# load_dotenv(find_dotenv())
+# ENV = os.getenv("FAST_API_ENV", "development").lower()
+# print("Environment:", ENV)
+#
+# # -------------------------
+# # Define configuration with Pydantic Settings (allowing extra keys)
+# # -------------------------
+# class Settings(BaseSettings):
+#     secret_key: str =Field("", env="SECRET_KEY")
+#     redis_url: str =Field("", env="REDIS_URL")
+#     client_url: str = Field("", env="CLIENT_URL")
+#     server_url: str = Field("", env="SERVER_URL")
+#     # Optional; set if needed
+#     MASYG_EXTRACTOR_STRIPE_SECRET_KEY: str = Field("", env="MASYG_EXTRACTOR_STRIPE_SECRET_KEY")
+#
+#     server_port: int = 5000
+#
+#     class Config:
+#         env_file = ".env"
+#         extra = "ignore"  # Ignore extra environment variables
+#
+# @lru_cache()
+# def get_settings():
+#     return Settings()
+#
+# settings = get_settings()
+#
+# # -------------------------
+# # Initialize Firebase early.
+# # -------------------------
+# from masyg_extractor.firebase.firebase_init import firebase_init
+# firebase_init()
+#
+# # -------------------------
+# # Create FastAPI app.
+# # -------------------------
+# from fastapi import FastAPI
+# app =app = FastAPI(middleware=[
+#     Middleware(ProxyHeadersMiddleware, trusted_hosts="*")  # Required for Railway
+# ])
+#
+#
+# # from starlette.middleware.sessions import SessionMiddleware
+# # app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+# init_mail(app)
+# # -------------------------
+# # (Optional) Add production security middleware.
+# # -------------------------
+#
+#
+#
+#
+# from starlette.middleware.base import BaseHTTPMiddleware
+# from starlette.responses import RedirectResponse
+#
+#
+# class ConditionalHTTPSRedirectMiddleware(BaseHTTPMiddleware):
+#     async def dispatch(self, request, call_next):
+#         if request.scope["type"] == "websocket":
+#             print("WebSocket connection detected, bypassing HTTPS redirect")
+#             return await call_next(request)
+#
+#         if request.url.scheme != "https":
+#             print(f"Redirecting HTTP request to HTTPS: {request.url}")
+#             url = request.url.replace(scheme="https")
+#             return RedirectResponse(url)
+#
+#         return await call_next(request)
+# from starlette.middleware.trustedhost import TrustedHostMiddleware
+#
+#
+# class WebsocketSafeTrustedHostMiddleware(TrustedHostMiddleware):
+#     async def __call__(self, scope, receive, send):
+#         # Bypass host validation for WebSocket handshake requests
+#         if scope["type"] == "http":
+#             headers = dict(scope["headers"])
+#             upgrade_header = headers.get(b"upgrade", b"").decode().lower()
+#             if upgrade_header == "websocket":
+#                 return await self.app(scope, receive, send)
+#
+#         # Proceed with host validation for other HTTP requests
+#         return await super().__call__(scope, receive, send)
+#
+# from starlette.middleware.sessions import SessionMiddleware
+#
+# class WebsocketSafeSessionMiddleware(SessionMiddleware):
+#     async def __call__(self, scope, receive, send):
+#         # If this is a websocket connection, bypass the session middleware.
+#         if scope["type"] == "websocket":
+#             return await self.app(scope, receive, send)
+#         # Otherwise, handle as usual.
+#         return await super().__call__(scope, receive, send)
+#
+# from fastapi.middleware.cors import CORSMiddleware
+#
+# origins = [settings.client_url, "http://localhost:3000"] if settings.client_url else ["http://localhost:3000"]
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=['*'],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+# if ENV == "production":
+#     # Conditional HTTPS redirect (bypasses websockets)
+#     # from starlette.middleware.sessions import SessionMiddleware
+#     #
+#     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+#     # app.add_middleware(BaseHTTPMiddleware)
+#     #
+#     # # Use custom TrustedHostMiddleware that skips WebSocket connections.
+#     # app.add_middleware(
+#     #     TrustedHostMiddleware,
+#     #     allowed_hosts=['*']
+#     # )
+#
+#     # Use your custom session middleware if needed (make sure it also bypasses websockets)
+#     # For example, if you haven't already, subclass SessionMiddleware similarly.
+#     # Here, we assume SessionMiddleware is already handled properly.
+#
+#
+#     # Set up Redis connection for sessions (or other uses)
+#     app.state.session_redis = redis.from_url(settings.redis_url)
+# else:
+#     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+#
+#     app.state.session_redis = None
+# print('redisurl',settings.redis_url)
+# print('server url',settings.server_url)
+# print('client url',settings.client_url)
+# # -------------------------
+# # Set up CORS middleware.
+# # -------------------------
+#
+#
+# # -------------------------
+# # Initialize Stripe.
+# # -------------------------
+# stripe.set_app_info(
+#     'stripe-samples/checkout-single-subscription',
+#     version='0.0.1',
+#     url='https://github.com/stripe-samples/checkout-single-subscription'
+# )
+# stripe.api_key = settings.MASYG_EXTRACTOR_STRIPE_SECRET_KEY
+# # print( settings.MASYG_EXTRACTOR_STRIPE_SECRET_KEY)
+#
+# # -------------------------
+# # Register your routers (FastAPI’s equivalent of FAST_API blueprints).
+# # -------------------------
+# # Assuming you have a module `routes` with a function `register_routers(app)`
+# from masyg_extractor.routes import register_routers
+# register_routers(app)
+#
+# # -------------------------
+# # Set up logging.
+# # -------------------------
+# logger = logging.getLogger(__name__)
+# logger.setLevel(logging.DEBUG if ENV == "development" else logging.INFO)
+# # (Additional logging handlers can be added as needed.)
+#
+# # -------------------------
+# # Import Socket.IO instance and define events.
+# # -------------------------
+# from masyg_extractor.utils.extensions import sio
+#
+# @sio.event
+# async def connect(sid, environ, auth):
+#     scope = environ.get("asgi.scope", {})
+#     query_string = scope.get("query_string", b"").decode()
+#     print("Received query string:", query_string)
+#     query_params = urllib.parse.parse_qs(query_string)
+#     client_id = query_params.get('clientId', ['Guest'])[0]
+#     print(f"Connecting client: {client_id}, SID: {sid}")
+#     await sio.enter_room(sid, client_id)
+#     await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, room=client_id)
+#     global_executor.MAIN_LOOP = asyncio.get_running_loop()
+#
+# @sio.event
+# async def disconnect(sid):
+#     print(f"Client disconnected: {sid}")
+#
+# # -------------------------
+# # ASGI setup: Combine FastAPI and Socket.IO.
+# # -------------------------
+# from socketio import ASGIApp
+# asgi_app = ASGIApp(sio, app)
+#
+# # -------------------------
+# # Entry point.
+# # -------------------------
+# if __name__ == "__main__":
+#     import uvicorn
+#     server_port = settings.server_port
+#     print(f"Starting ASGI server on port {server_port}")
+#     uvicorn.run("server:asgi_app", host="0.0.0.0", port=server_port, reload=(ENV == "development") ,proxy_headers=True)

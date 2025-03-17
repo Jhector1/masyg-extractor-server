@@ -1,9 +1,7 @@
 import os
 import time
 import stripe
-import logging
-from datetime import datetime
-from fastapi import APIRouter, Request, HTTPException, status
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 from firebase_admin import firestore
 from masyg_extractor.services.subscription_services import *  # Ensure these functions are updated to use Firestore as well

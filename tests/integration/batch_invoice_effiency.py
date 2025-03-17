@@ -1,7 +1,6 @@
 import unittest
 import time
-from unittest.mock import patch, MagicMock
-from datetime import datetime
+from unittest.mock import patch
 import logging
 
 # Ensure Firebase Admin is initialized so that firestore.client() can work.

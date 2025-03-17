@@ -1,10 +1,7 @@
 import io
-import base64
 import json
 import os
-import re
 import subprocess
-import tempfile
 import pytest
 from PIL import Image
 import pytesseract
@@ -31,7 +28,7 @@ def create_test_image(text: str = "Hello"):
     """
     Create an in-memory PNG image with some text drawn on it.
     """
-    from PIL import ImageDraw, ImageFont
+    from PIL import ImageDraw
     # Create a white image
     image = Image.new("RGB", (200, 100), color="white")
     draw = ImageDraw.Draw(image)

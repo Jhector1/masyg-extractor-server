@@ -1,28 +1,11 @@
-import asyncio
-import uuid
 
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
-from typing import Tuple, Any
 
-from fastapi import FastAPI, APIRouter, Request, UploadFile, File, Depends, HTTPException, status
+from fastapi import APIRouter, Request, HTTPException, status
 
-from masyg_extractor.services.global_executor import MAIN_LOOP
-from masyg_extractor.services.my_log import send_log, logger
-from masyg_extractor.utils.tool import remove_sensitive_data
-import PyPDF2
 from firebase_admin import firestore
 from masyg_extractor.services.file_extractor_service import *
 from masyg_extractor.services.image_extractor_service import *
-from firebase_admin import firestore, firestore as admin_fs
-from masyg_extractor.services.firestore_helpers import (
-    get_firestore_client,
-    document_get,
-    document_set,
-    document_update,
-    document_delete,
-    stream_collection
-)
+from firebase_admin import firestore
 # from tool.extensions import sio
 
 # Initialize Firestore client.

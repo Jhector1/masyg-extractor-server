@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 from unittest import TestCase
 from unittest.mock import patch, MagicMock
 

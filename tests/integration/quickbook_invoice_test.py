@@ -5,16 +5,10 @@ firebase_init()
 
 import asyncio
 import logging
-import os
 from unittest import TestCase
 from unittest.mock import patch, MagicMock
 
 # Now import the Firestore repository functions.
-from masyg_extractor.integrations.repository.firestore_repository import (
-    invoice_exists_in_firestore,
-    store_customer_record,
-    store_invoice_record
-)
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -226,7 +220,6 @@ class TestFirestoreRecords(TestCase):
     @patch("masyg_extractor.integrations.repository.firestore_repository.firestore_db")
     def test_store_invoice_record_valid(self, mock_firestore_db):
         """Test that store_invoice_record properly stores an invoice record in Firestore."""
-        from masyg_extractor.integrations.repository.firestore_repository import store_invoice_record
 
         user_id = "user123"
         record_type = "invoices"

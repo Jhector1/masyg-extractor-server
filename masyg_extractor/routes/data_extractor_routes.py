@@ -5,26 +5,23 @@ import logging
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Request, UploadFile, File, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Request, UploadFile, File, Depends, status
+
 
 from firebase_admin import firestore, firestore as admin_fs
 
 from masyg_extractor.services.change_log_services import handle_document_edit, handle_document_delete, \
     handle_document_add, LINE_ITEM_REGEX, handle_line_item_update, handle_group_delete
-from masyg_extractor.services.processing import process_files_in_parallel, process_file_async
+from masyg_extractor.services.processing import process_files_in_parallel
 from masyg_extractor.services.image_extractor_service import compress_file_blob
 from masyg_extractor.services.firestore_helpers import (
     get_firestore_client,
     document_get,
-    document_set,
     document_update,
     document_delete,
     stream_collection,
 )
 from masyg_extractor.services.dependencies import get_firebase_user, generate_group_id
-from masyg_extractor.utils.extensions import sio
-from masyg_extractor.utils.filename_utils import sanitize_generate_unique_filename
 from masyg_extractor.services.my_log import send_log, logger
 
 router = APIRouter(prefix="/extractor")

@@ -364,7 +364,6 @@ async def create_customer_portal(request: Request):
 
 from fastapi import APIRouter, Request, HTTPException, status, Depends
 from fastapi.responses import JSONResponse
-import logging
 
 # Assuming these are your helper functions:
 # - get_firebase_user: retrieves the Firebase-authenticated user details.

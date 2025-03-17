@@ -1,5 +1,5 @@
 import firebase_admin
-from firebase_admin import credentials, db
+from firebase_admin import credentials
 import os
 
 from masyg_extractor.config import FIREBASE_CONFIG
