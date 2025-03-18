@@ -74,7 +74,7 @@ async def extract_text(file_bytes: bytes, file_type: str, uploaded_file, client_
         extracted_text, _ = await asyncio.to_thread(remove_sensitive_data, extracted_text)
 
         if extracted_text and extracted_text.strip():
-            extractor_used = extractor.__name__
+            extractor_used = extractor.__name__.upper()
             asyncio.create_task(
                 send_log(f"✅ Text extraction succeeded with {extractor_used}", user_room=client_id))
             logger.info(f"Text extraction succeeded with {extractor_used}")
@@ -136,7 +136,7 @@ async def process_text_and_parse(
             else:
                 asyncio.create_task(send_log("⚠️ No more extractors to retry", user_room=client_id))
                 logger.warning("No more extractors to retry.")
-                raise ValueError("Text processing failed with all extractors")
+                raise ValueError("❌ Text processing failed with all extractors")
     return parsed_content
 
 async def update_firestore_file(user_id: str, group_id: str, sanitized_filename: str, parsed_content: Dict[str, Any]) -> None:

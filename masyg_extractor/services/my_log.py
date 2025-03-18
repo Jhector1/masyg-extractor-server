@@ -37,3 +37,37 @@ async def send_log(message: str, user_room=None):
     await sio.emit('log_message', {'data': message}, namespace='/', room=user_room)
     # Optional local log
     logger.info(f"Queued log: {message} (room={user_room})")
+
+
+class ClientFilter(logging.Filter):
+    def __init__(self, client_room):
+        super().__init__()
+        self.client_room = client_room
+
+    def filter(self, record):
+        # Check if a target room is specified in the log record.
+        # If not specified, or if it matches this handler's room, allow the record.
+        target = getattr(record, 'target_room', None)
+        return target is None or target == self.client_room
+
+class SocketIOHandler(logging.Handler):
+    def __init__(self, sio, room):
+        super().__init__()
+        self.sio = sio
+        self.room = room
+        # Add our client-specific filter.
+        self.addFilter(ClientFilter(room))
+
+    def emit(self, record):
+        # If the filters do not pass, skip emitting.
+        if not self.filter(record):
+            return
+        try:
+            log_entry = self.format(record)
+            # Asynchronously emit the log message to the specific room.
+            asyncio.create_task(
+                self.sio.emit("log_message", {"data": log_entry}, room=self.room)
+            )
+        except Exception:
+            self.handleError(record)
+

@@ -137,6 +137,7 @@ def verify_tmp_access():
     except Exception as e:
         raise Exception(f"Cannot write to /tmp: {str(e)}")
 from google.cloud import vision
+setup_google_credentials()
 
 def test_google_vision():
     try:
@@ -145,3 +146,4 @@ def test_google_vision():
     except Exception as e:
         raise Exception(f"Failed to initialize Vision API client: {str(e)}")
 
+test_google_vision()

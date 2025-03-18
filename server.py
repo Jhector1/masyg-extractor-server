@@ -9,14 +9,18 @@ Run with an ASGI server such as uvicorn:
 
 import os
 import logging
+import uuid
+
 import stripe
 import asyncio
 
 import urllib.parse
 from dotenv import load_dotenv, find_dotenv
+from starlette.responses import JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from masyg_extractor.services.helper import init_mail
+from masyg_extractor.services.my_log import SocketIOHandler, logger
 from masyg_extractor.utils.extensions import sio
 
 # Load environment variables.
@@ -28,7 +32,7 @@ print("Environment:", ENV)
 from masyg_extractor.firebase.firebase_init import firebase_init
 firebase_init()
 
-from fastapi import FastAPI
+from fastapi import FastAPI,Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -96,9 +100,9 @@ stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
 from masyg_extractor.routes import register_routers
 register_routers(app)
 
-# Set up logging.
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG if ENV == "development" else logging.INFO)
+# # Set up logging.
+# logger = logging.getLogger(__name__)
+# logger.setLevel(logging.DEBUG if ENV == "development" else logging.INFO)
 
 # Uncomment and adjust logging as needed.
 # if ENV == "development":
@@ -113,7 +117,13 @@ logger.setLevel(logging.DEBUG if ENV == "development" else logging.INFO)
 
 # Set up Socket.IO.
 import socketio
-
+@app.get("/client-id")
+async def get_client_id(request: Request):
+    client_id = request.session.get("client_id")
+    if not client_id:
+        client_id = str(uuid.uuid4())
+        request.session["client_id"] = client_id
+    return JSONResponse({"clientId": client_id})
 # Create an async Socket.IO server with allowed CORS origins.
 # sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=origins)
 
@@ -133,6 +143,24 @@ async def connect(sid, environ, auth):
     # Update the global event loop if needed.
     from masyg_extractor.services import global_executor
     global_executor.MAIN_LOOP = asyncio.get_running_loop()
+
+
+''''@sio.event
+async def connect(sid, environ, auth):
+    await sio.enter_room(sid, sid)  # Use the sid as the room.
+    print(f"Client connected: {sid}")
+
+    # Configure logging for this connection.
+    socket_handler = SocketIOHandler(sio, sid)
+    socket_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    socket_handler.setFormatter(formatter)
+    logger.addHandler(socket_handler)
+
+    # logger.info(f"Welcome, client with sid {sid}!")
+    from masyg_extractor.services import global_executor
+    global_executor.MAIN_LOOP = asyncio.get_running_loop()'''
+
 
 @sio.event
 async def disconnect(sid):

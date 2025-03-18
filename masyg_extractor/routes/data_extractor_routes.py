@@ -33,8 +33,10 @@ async def extract_data(
     firebase_user: dict = Depends(get_firebase_user)
 ):
     print(files)
-    client_id = request.cookies.get('clientId', 'Guest')
+    client_id = request.session["client_id"]
+    print('fffffffff',client_id)
     user_id = firebase_user.get('userId')
+    # print(user_id)
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

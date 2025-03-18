@@ -122,7 +122,7 @@ async def signup(request: Request):
 @router.post("/login")
 async def login(request: Request):
     data = await request.json()
-    clientId = request.cookies.get('clientId', 'Guest')
+    clientId = request.session["client_id"]
     print('client------', clientId)
     if not data:
         raise HTTPException(status_code=400, detail="No data provided")
@@ -175,6 +175,8 @@ async def login(request: Request):
         print("Client ID", clientId)
         # await sio.emit("welcome", {"message": f"Welcome, {clientId}!"}, room=clientId)
         asyncio.create_task(send_log( '✅Login successful!', user_room=clientId))
+        # logger.info(f"✅Login successful!", extra={"target_room": clientId})
+        # logger.info("Processing POST request", extra={"target_room": sid})
 
         return {"message": "Login successful", "user": request.session['user']}
 
@@ -272,6 +274,10 @@ async def update_user_info(request: Request):
 class ResetRequest(BaseModel):
     email: EmailStr
 
+
+import datetime
+
+
 @router.post("/request-reset")
 async def request_reset(request: Request, reset_req: ResetRequest, background_tasks: BackgroundTasks):
     email = reset_req.email
@@ -293,17 +299,73 @@ async def request_reset(request: Request, reset_req: ResetRequest, background_ta
 
     reset_url = f"{os.getenv('CLIENT_URL')}/reset-password/{token}"
 
+    # Build a modern HTML email template with inline CSS
+    html_body = f"""
+    <html>
+      <head>
+        <style>
+          body {{
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            padding: 20px;
+          }}
+          .container {{
+            background-color: #ffffff;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+          }}
+          h2 {{
+            color: #333333;
+          }}
+          p {{
+            color: #555555;
+            font-size: 16px;
+          }}
+          .btn {{
+            display: inline-block;
+            padding: 10px 20px;
+            margin-top: 20px;
+            background-color: #007BFF;
+            color: #ffffff;
+            text-decoration: none;
+            border-radius: 5px;
+          }}
+          .footer {{
+            margin-top: 30px;
+            font-size: 12px;
+            color: #999999;
+          }}
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h2>Password Reset Request</h2>
+          <p>We received a request to reset your password. Click the button below to reset it:</p>
+          <a href="{reset_url}" class="btn">Reset Password</a>
+          <p>If you did not request a password reset, please ignore this email.</p>
+          <div class="footer">
+            <p>&copy; {datetime.datetime.now().year} Masyg Link. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
     message = MessageSchema(
         subject="Password Reset Request",
         recipients=[email],
-        body=f"Click the link to reset your password: {reset_url}",
+        body=html_body,
         subtype="html"
     )
 
-    # Schedule the email sending in the background using the FastMail instance from the app state.
+    # Schedule email sending in the background
     background_tasks.add_task(request.app.state.mail.send_message, message)
 
     return {"message": "Password reset link sent successfully."}
+
 
 
 @router.post("/reset-password")
