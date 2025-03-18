@@ -33,7 +33,9 @@ async def extract_data(
     firebase_user: dict = Depends(get_firebase_user)
 ):
     print(files)
-    client_id = request.session["client_id"]
+    client_id = request.session.get("client_id")
+    if client_id is None:
+        client_id ='Guest'
     print('fffffffff',client_id)
     user_id = firebase_user.get('userId')
     # print(user_id)

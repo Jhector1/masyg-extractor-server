@@ -122,8 +122,10 @@ async def signup(request: Request):
 @router.post("/login")
 async def login(request: Request):
     data = await request.json()
-    clientId = request.session["client_id"]
-    print('client------', clientId)
+    clientId = request.session.get("client_id")
+    if clientId is None:
+        clientId = 'Guest'
+    # print('client------', clientId)
     if not data:
         raise HTTPException(status_code=400, detail="No data provided")
 
