@@ -27,7 +27,7 @@ async def send_invoice_route(request: Request):
     try:
         data = await request.json()
         asyncio.create_task(
-            send_log("✅ Received invoices payload", user_room=client_id))
+            send_log("⚙️ Processing invoices...", user_room=client_id))
 
         # If the payload is a dict, transform it into a list of invoice objects
         if isinstance(data, dict):
@@ -117,8 +117,8 @@ async def send_invoice_route(request: Request):
         return JSONResponse(content=responses)
     except Exception as e:
         error_msg = f"Failed to process /send-invoice request: {str(e)}"
-        asyncio.create_task(
-            send_log(error_msg, user_room=client_id))
+        # asyncio.create_task(
+        #     send_log(error_msg, user_room=client_id))
         return JSONResponse({"error": "Failed to process request", "details": str(e)}, status_code=500)
 
 @router.get("/get-items")

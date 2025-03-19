@@ -32,9 +32,11 @@ async def log_consumer():
 
 async def send_log(message: str, user_room=None):
     """Queues a log message for async emission."""
+
     # with queue_lock:
     #     log_queue.append((message, user_room))
     await sio.emit('log_message', {'data': message}, namespace='/', room=user_room)
+
     # Optional local log
     logger.info(f"Queued log: {message} (room={user_room})")
 
@@ -71,3 +73,29 @@ class SocketIOHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
+# logging_queue.py
+
+from collections import deque
+
+# Global queue for log messages: each entry is a tuple (message, room)
+
+
+async def log_processor(sio, total_steps=10):
+    """Background task that processes the log queue and sends progress updates."""
+    current_step = 0
+    while True:
+        # Process and emit all queued log messages.
+        while log_queue:
+            message, room = log_queue.popleft()
+            await sio.emit('log_message', {'data': message}, namespace='/', room=room)
+            current_step += 1  # increment if each log represents a step
+            progress = min(100, int((current_step / total_steps) * 100))
+            await sio.emit('progress_update', {'progress': progress}, namespace='/', room=room)
+        await asyncio.sleep(0.1)
+
+# Usage: start the log processor with a total step count (e.g., 10)
+# asyncio.create_task(log_processor(sio, total_steps=10))
+
+def queue_log(message: str, room: str):
+    """Enqueue a log message to be sent to the given room."""
+    log_queue.append((message, room))

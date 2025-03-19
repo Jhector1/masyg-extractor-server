@@ -18,8 +18,8 @@ def store_invoice_record(
     General Firestore storage method for 'invoices', 'receipts', etc.
     """
     if not user_id or not group_id or not transaction_id or not record_type:
-        asyncio.create_task(
-            send_log("❌ user_id, record_type, group_id, and transaction_id are required.", user_room=client_id))
+        # asyncio.create_task(
+        #     send_log("❌ user_id, record_type, group_id, and transaction_id are required.", user_room=client_id))
         raise ValueError("Missing required Firestore path parameters.")
 
     doc_ref = (
@@ -68,8 +68,8 @@ def store_customer_record(
     Stores customer data in Firestore.
     """
     if not user_id:
-        asyncio.create_task(
-            send_log("❌ user_id is required to store customer record in Firestore.", user_room=client_id))
+        # asyncio.create_task(
+        #     send_log("❌ user_id is required to store customer record in Firestore.", user_room=client_id))
         raise ValueError("user_id is required.")
 
     doc_ref = (

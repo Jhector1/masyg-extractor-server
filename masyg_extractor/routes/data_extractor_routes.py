@@ -21,6 +21,7 @@ from masyg_extractor.services.firestore_helpers import (
     document_delete,
     stream_collection,
 )
+from masyg_extractor.utils.extensions import sio
 from masyg_extractor.services.dependencies import get_firebase_user, generate_group_id
 from masyg_extractor.services.my_log import send_log, logger
 
@@ -33,11 +34,15 @@ async def extract_data(
     firebase_user: dict = Depends(get_firebase_user)
 ):
     print(files)
+
     client_id = request.session.get("client_id")
     if client_id is None:
         client_id ='Guest'
     print('fffffffff',client_id)
     user_id = firebase_user.get('userId')
+    await sio.emit("progress_update", {"progress": 10}, room=client_id)
+    await asyncio.sleep(0.2)  # simulate a short wait
+
     # print(user_id)
     if not user_id:
         raise HTTPException(
@@ -45,7 +50,7 @@ async def extract_data(
             detail="User ID not found"
         )
 
-    asyncio.create_task(send_log("↗️ Request Received", user_room=client_id))
+    # asyncio.create_task(send_log("↗️ Request Received", user_room=client_id))
     # await sio.emit('log_message', {'data': '✅ Request Received'}, room=client_id)
 
     group_id = generate_group_id()
@@ -70,7 +75,7 @@ async def extract_data(
             continue
 
         sanitized_filename = result.get('sanitized_filename')
-        compression_stream = io.BytesIO(file_contents[file.filename])
+        compression_stream = io.BytesIO(file_contents[file.filename]) #process
         compressed_file = await asyncio.to_thread(compress_file_blob, compression_stream, file.filename)
         compressed_file.seek(0)
         content = compressed_file.read()

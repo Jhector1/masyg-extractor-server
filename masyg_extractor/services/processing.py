@@ -6,6 +6,7 @@ from typing import Tuple, Any, List, Dict
 
 from firebase_admin import firestore
 from masyg_extractor.services.my_log import send_log, logger
+from masyg_extractor.utils.extensions import sio
 from masyg_extractor.utils.helper import FakeUploadFile
 from masyg_extractor.utils.tool import remove_sensitive_data
 from masyg_extractor.services.image_extractor_service import extract_text_from_image
@@ -43,8 +44,8 @@ async def extract_text(file_bytes: bytes, file_type: str, uploaded_file, client_
     while extractor_index < len(extractors):
 
         logger.info(f"🔄Trying extractor: {extractors[extractor_index].__name__}")
-        asyncio.create_task(
-            send_log(f"🔄Trying extractor: {extractors[extractor_index].__name__}", user_room=client_id))
+        # asyncio.create_task(
+        #     send_log(f"🔄Trying extractor: {extractors[extractor_index].__name__}", user_room=client_id))
 
         extractor = extractors[extractor_index]
         if extractor.__name__ in ["extract_text_with_ocr_space", "extract_text_from_scanned_pdf",
@@ -75,8 +76,8 @@ async def extract_text(file_bytes: bytes, file_type: str, uploaded_file, client_
 
         if extracted_text and extracted_text.strip():
             extractor_used = extractor.__name__.upper()
-            asyncio.create_task(
-                send_log(f"✅ Text extraction succeeded with {extractor_used}", user_room=client_id))
+            # asyncio.create_task(
+            #     send_log(f"✅ Text extraction succeeded with {extractor_used}", user_room=client_id))
             logger.info(f"Text extraction succeeded with {extractor_used}")
             break
 
@@ -166,7 +167,7 @@ async def process_file_async(
     try:
         logger.info(f"Processing file: {uploaded_file.filename}")
         asyncio.create_task(
-            send_log(f"⚙️ Processing file: {uploaded_file.filename}", user_room=client_id))
+            send_log(f"⚙️ Processing file: {uploaded_file.filename}...", user_room=client_id))
         filename_lower = uploaded_file.filename.lower()
         if filename_lower.endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
             file_type = 'image'
@@ -234,7 +235,12 @@ async def process_files_in_parallel(
     ]
     results_list = await asyncio.gather(*tasks, return_exceptions=True)
     results = {}
+    step = 100 / len(files)
     for idx, res in enumerate(results_list):
+
+        await sio.emit("progress_update", {"progress":( idx+1)* step}, room=client_id)
+        asyncio.sleep(1)
+
         if isinstance(res, Exception):
             logger.exception(f"Error processing file at index {idx}: {res}")
             results[idx] = {'error': str(res)}

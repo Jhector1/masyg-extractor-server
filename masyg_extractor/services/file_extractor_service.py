@@ -1,6 +1,7 @@
 import asyncio
 
 import fitz
+import httpx
 import spacy
 from transformers import pipeline
 import openai
@@ -17,6 +18,7 @@ from io import BytesIO
 from pdf2image import convert_from_bytes
 import pytesseract
 import logging
+from masyg_extractor.services.my_log import logger
 
  # PyMuPDF
 
@@ -113,33 +115,46 @@ def extract_text_from_pdf_image(file):
 
     return extracted_text
 
-import httpx
-import logging
 
-async def extract_text_with_ocr_space(uploaded_file, api_key='K84148755688957'):
+
+async def extract_text_with_ocr_space(uploaded_file,  api_key='K84148755688957'):
     """
-    Asynchronously extract text from an image-based PDF using OCR.Space API.
+    Extract text using OCR.Space, queuing progress logs rather than emitting directly.
     """
     ocr_url = "https://api.ocr.space/parse/image"
-    async with httpx.AsyncClient(timeout=60) as client:
-        files = {
-            'file': (uploaded_file.filename, uploaded_file.stream, uploaded_file.mimetype)
-        }
-        data = {
-            'apikey': api_key,
-            'language': 'eng',
-            'isOverlayRequired': False
-        }
-        response = await client.post(ocr_url, files=files, data=data)
-    if response.status_code != 200:
-        logging.error(f"OCR.Space API error (HTTP {response.status_code}): {response.text}")
-        return ""
-    result = response.json()
-    if not result.get('ParsedResults'):
-        logging.error(f"OCR.Space returned no results: {result}")
-        return ""
-    extracted_text = " ".join(res.get('ParsedText', '') for res in result['ParsedResults'])
-    return extracted_text.strip()
+
+    # 1️⃣ Indicate start of OCR step
+    logger.info(f"🔄 Trying OCR on {uploaded_file.filename}")
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            files = {'file': (uploaded_file.filename, uploaded_file.stream, uploaded_file.mimetype)}
+            data = {'apikey': api_key, 'language': 'eng', 'isOverlayRequired': False}
+            response = await client.post(ocr_url, files=files, data=data)
+
+        response.raise_for_status()
+        result = response.json()
+
+        if not result.get('ParsedResults'):
+            logger.info(f"❌ OCR returned no results for {uploaded_file.filename}")
+            return ""
+            # , "")
+
+        extracted_text = " ".join(res.get('ParsedText', '') for res in result['ParsedResults'])
+        logger.info(f"✅ OCR succeeded for {uploaded_file.filename}")
+        return extracted_text.strip()
+        # , "OCR_SPACE")
+
+    except httpx.ReadTimeout:
+        logger.info(f"❌ OCR request timed out for {uploaded_file.filename}")
+    except httpx.HTTPStatusError as e:
+        logger.info(f"❌ OCR HTTP error ({e.response.status_code}) for {uploaded_file.filename}")
+    except Exception as e:
+        logging.exception("Unexpected error in OCR extraction")
+        logger.info(f"❌ Error processing {uploaded_file.filename}: {e}")
+
+    return ""
+            # , "")
 
 # except requests.exceptions.RequestException as e:
 #     logging.error(f"Request exception during OCR.Space API call: {e}")

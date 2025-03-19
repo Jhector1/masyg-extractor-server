@@ -96,13 +96,13 @@ def get_or_create_customer(
 
     # If we have no ID, try to find existing by name
     if not customer_id:
-        asyncio.create_task(
-            send_log(f"🔦 Checking QuickBooks for customer: {customer_name}", user_room=client_id))
+        # asyncio.create_task(
+        #     send_log(f"🔦 Checking QuickBooks for customer: {customer_name}", user_room=client_id))
         logger.info(f"Customer ID not provided; checking QuickBooks for {customer_name}")
         if CustomerService.check_customer_exists(request, customer_name=customer_name, client_id=client_id):
             customer_id = CustomerService.fetch_customer_id_by_name(request, customer_name, client_id=client_id)
             if customer_id:
-                send_log(f"✅ Found existing customer in QuickBooks: {customer_name} (ID: {customer_id})", user_room=client_id)
+                # send_log(f"✅ Found existing customer in QuickBooks: {customer_name} (ID: {customer_id})", user_room=client_id)
                 logger.info(f"Found customer in QuickBooks: {customer_name} (ID: {customer_id})")
 
     # If we do have an ID or we just fetched it, check if it actually exists
@@ -116,8 +116,8 @@ def get_or_create_customer(
         return customer_id
 
     # Otherwise, create a new one
-    asyncio.create_task(
-        send_log(f"❌ No valid customer found; creating new customer for {customer_name}.", user_room=client_id))
+    # asyncio.create_task(
+        # send_log(f"❌ No valid customer found; creating new customer for {customer_name}.", user_room=client_id))
     logger.info(f"Creating new customer for {customer_name}.")
     new_customer_id = CustomerService.create_customer(request, customer_name, client_id=client_id)
     store_customer_record(user_id, new_customer_id, {"Id": new_customer_id, "DisplayName": customer_name}, client_id=client_id)

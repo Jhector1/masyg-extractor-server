@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from masyg_extractor.services.helper import init_mail
-from masyg_extractor.services.my_log import SocketIOHandler, logger
+from masyg_extractor.services.my_log import SocketIOHandler, logger, log_processor
 from masyg_extractor.utils.extensions import sio
 
 # Load environment variables.
@@ -126,7 +126,10 @@ async def get_client_id(request: Request):
     return JSONResponse({"clientId": client_id})
 # Create an async Socket.IO server with allowed CORS origins.
 # sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=origins)
-
+# @app.on_event("startup")
+# async def startup_event():
+#     # Start the background log processor.
+#     asyncio.create_task(log_processor(sio))
 # --- Socket.IO events ---
 @sio.event
 async def connect(sid, environ, auth):
