@@ -70,9 +70,13 @@ async def extract_data(
     for file in files:
         result = results.get(files.index(file), {})
         if 'error' in result['parsed_content']:
-            asyncio.create_task(send_log(f'❌{file.filename} failed  to process. Please submit a valid invoice, bill, or receipt', user_room=client_id))
+            asyncio.create_task(send_log(f'❌ {file.filename} failed  to process. Please submit a valid invoice, bill, or receipt', user_room=client_id))
             failed_file_quant+=1
             continue
+        else:
+            asyncio.create_task(
+                send_log(f'✅ {file.filename} process successfully!',
+                         user_room=client_id))
 
         sanitized_filename = result.get('sanitized_filename')
         compression_stream = io.BytesIO(file_contents[file.filename]) #process

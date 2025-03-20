@@ -239,7 +239,7 @@ async def process_files_in_parallel(
     for idx, res in enumerate(results_list):
 
         await sio.emit("progress_update", {"progress":( idx+1)* step}, room=client_id)
-        asyncio.sleep(1)
+        await asyncio.sleep(1)
 
         if isinstance(res, Exception):
             logger.exception(f"Error processing file at index {idx}: {res}")

@@ -117,13 +117,14 @@ register_routers(app)
 
 # Set up Socket.IO.
 import socketio
-@app.get("/client-id")
+@app.post("/client-id")
 async def get_client_id(request: Request):
     client_id = request.session.get("client_id")
     if not client_id:
         client_id = str(uuid.uuid4())
         request.session["client_id"] = client_id
     return JSONResponse({"clientId": client_id})
+
 # Create an async Socket.IO server with allowed CORS origins.
 # sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=origins)
 # @app.on_event("startup")
