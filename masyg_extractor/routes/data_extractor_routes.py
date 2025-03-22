@@ -33,7 +33,7 @@ async def extract_data(
     files: List[UploadFile] = File(...),
     firebase_user: dict = Depends(get_firebase_user)
 ):
-    print(files)
+
 
     client_id = request.session.get("client_id")
     if client_id is None:

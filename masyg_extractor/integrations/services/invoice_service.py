@@ -61,8 +61,8 @@ class InvoiceService:
                 user_id,
                 client_id=client_id
             )
-            logger.info(f"Using customer ID: {valid_customer_id}")
-            print("0k0k0k0k0k")
+            # logger.info(f"Using customer ID: {valid_customer_id}")
+            # print("0k0k0k0k0k")
             if not items:
                 logger.info("No items provided for invoice.")
                 return {"error": "Items required for invoice creation."}
@@ -70,7 +70,7 @@ class InvoiceService:
             line_items = []
             total_amount = 0.0
             for idx, item in enumerate(items):
-                print("0k0k0k0k0k")
+                # print("0k0k0k0k0k")
                 item_name = item.get("item_name")
                 item_id = item.get("item_id")
                 exists = await check_item_exists(

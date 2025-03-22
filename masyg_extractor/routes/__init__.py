@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from masyg_extractor.integrations.router  import router as quickbook_router
+from masyg_extractor.integrations.qb_router  import router as quickbook_router
 
 from .admin.admin_webhook import router as webhook_router
 

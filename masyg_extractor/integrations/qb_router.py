@@ -15,6 +15,7 @@ from masyg_extractor.utils.tool import get_original_filename
 router = APIRouter(prefix="/integrations/quickbook")
 router.include_router(auth_router, prefix="", tags=["QuickBooks Auth"])
 
+
 async def normalize_payload(data, record_key: str) -> list:
     """
     Normalize the payload into a list of record dictionaries.
@@ -47,6 +48,7 @@ async def normalize_payload(data, record_key: str) -> list:
     print(records)
     return records
 
+
 async def process_single_record(
     item: dict,
     send_func,
@@ -64,7 +66,6 @@ async def process_single_record(
       - Invoke the provided send function (invoice or receipt)
       - Log outcomes and return the response or error
     """
-    # Update progress (each task updates based on its index)
     progress = (100 / total) * (idx + 1)
     await sio.emit("progress_update", {"progress": progress}, room=client_id)
     await asyncio.sleep(.01)
@@ -76,7 +77,6 @@ async def process_single_record(
     line_items = item.get("line_items")
     transaction_id = item.get("transaction_id", "").strip()
 
-    # Validate required fields
     if not customer_name:
         return { "error": "Customer name is required.", record_key: item }
 
@@ -84,7 +84,6 @@ async def process_single_record(
         asyncio.create_task(send_log("❌ Date is required", user_room=client_id))
         return { "error": "Date is required.", record_key: item }
 
-    # Validate date format (ISO format: YYYY-MM-DD)
     try:
         datetime.fromisoformat(date_str)
     except ValueError:
@@ -94,7 +93,6 @@ async def process_single_record(
         return { "error": "Group ID is required.", record_key: item }
 
     if not line_items or not isinstance(line_items, list):
-
         return { "error": "A list of line_items is required.", record_key: item }
 
     if not transaction_id:
@@ -129,6 +127,7 @@ async def process_single_record(
             record_key: item
         }
 
+
 async def process_records(
     records: list,
     send_func,
@@ -147,6 +146,7 @@ async def process_records(
     ]
     responses = await asyncio.gather(*tasks, return_exceptions=True)
     return responses
+
 
 @router.post("/send-invoice")
 async def send_invoice_route(request: Request):
@@ -187,11 +187,12 @@ async def send_invoice_route(request: Request):
     print(responses)
     return JSONResponse(content=responses)
 
+
 @router.post("/send-receipt")
 async def send_receipt_route(request: Request):
     """
-    Handle sending receipts to QuickBooks.
-    Normalizes the payload, validates required fields, and processes each receipt individually.
+    Handle sending sales receipts to QuickBooks.
+    Normalizes the payload, validates required fields, and processes each receipt concurrently.
     """
     client_id = request.cookies.get("clientId", "Guest")
     logger.info(f"Client ID: {client_id}")
@@ -223,6 +224,7 @@ async def send_receipt_route(request: Request):
         user_id=user_id,
         request=request
     )
+    print(responses)
     return JSONResponse(content=responses)
 
 @router.get("/get-items")
