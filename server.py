@@ -48,7 +48,7 @@ if ENV == "production":
     app.add_middleware(
         SessionMiddleware,
         secret_key=secret_key,
-        same_site="lax",
+        same_site="none",
         https_only=True  # SESSION_COOKIE_SECURE=True
     )
 

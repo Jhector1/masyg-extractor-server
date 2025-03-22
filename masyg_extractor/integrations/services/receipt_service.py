@@ -4,18 +4,16 @@ from fastapi import Request
 from masyg_extractor.services.my_log import logger, send_log
 from masyg_extractor.integrations.quickbooks_client import quickbooks_request
 from masyg_extractor.integrations.repository.firestore_repository import (
-    store_invoice_record,
-    invoice_exists_in_firestore
+    store_receipt_record,
+    receipt_exists_in_firestore
 )
 from masyg_extractor.integrations.services.customer_service import get_or_create_customer
 from masyg_extractor.integrations.services.item_service import check_item_exists, create_item
 from masyg_extractor.integrations.helper.transaction_helpers import generate_doc_number, check_duplicate_record
-from masyg_extractor.utils.tool import get_original_filename
 
-
-class InvoiceService:
+class ReceiptService:
     @staticmethod
-    async def send_invoice(
+    def send_receipt(
             request: Request,
             customer_name: str,
             customer_id: Optional[str],
@@ -24,68 +22,35 @@ class InvoiceService:
             group_id: str,
             date: str,
             user_id: str,
-            record_type: str = "invoices",
+            record_type: str = "receipts",
             client_id: str = ""
     ) -> Dict[str, Any]:
         """
-        Asynchronously creates an invoice in QuickBooks and stores key invoice info in Firestore.
+        Creates a receipt in QuickBooks and stores key receipt info in Firestore.
         """
-        print("Type of invoice_exists_in_firestore:", type(invoice_exists_in_firestore))
         try:
-            print("0k0k0k0k0k")
             if not group_id or group_id.strip() == "":
-                return {"error": "Group ID is required for invoice creation."}
+                return {"error": "Group ID is required for receipt creation."}
 
-            # Offload duplicate check to a worker thread.
-            dup = await asyncio.to_thread(
-                check_duplicate_record,
-                user_id,
-                invoice_exists_in_firestore,
-                record_type,
-                group_id,
-                transaction_id,
-                client_id
-            )
+            dup = check_duplicate_record(user_id, receipt_exists_in_firestore, record_type, group_id, transaction_id, client_id)
             if dup.get("error"):
-                msg = f"{record_type.capitalize()} for ({get_original_filename(transaction_id)}) already recorded in QuickBooks."
-                # Log asynchronously without blocking the current execution.
-                await send_log(f"❌ {msg}", user_room=client_id)
-                asyncio.sleep(1)
                 return dup
 
-            # Offload customer lookup/creation.
-            valid_customer_id = await get_or_create_customer(
-                request,
-                customer_id,
-                customer_name,
-                user_id,
-                client_id=client_id
-            )
+            valid_customer_id = get_or_create_customer(request, customer_id, customer_name, user_id, client_id=client_id)
             logger.info(f"Using customer ID: {valid_customer_id}")
-            print("0k0k0k0k0k")
+
             if not items:
-                logger.info("No items provided for invoice.")
-                return {"error": "Items required for invoice creation."}
+                logger.info("No items provided for receipt.")
+                return {"error": "Items required for receipt creation."}
 
             line_items = []
             total_amount = 0.0
             for idx, item in enumerate(items):
-                print("0k0k0k0k0k")
                 item_name = item.get("item_name")
                 item_id = item.get("item_id")
-                exists = await check_item_exists(
-                    item_name,
-                    item_id,
-                    client_id=client_id,
-                    request=request
-                )
-                if not exists:
+                if not check_item_exists(item_name, item_id, client_id=client_id, request=request):
                     logger.info(f"Item '{item_name}' not found; creating new item.")
-                    new_id = await create_item(
-                        item,
-                        client_id=client_id,
-                        request=request
-                    )
+                    new_id = create_item(item, client_id=client_id, request=request)
                     item["item_id"] = new_id
                     item_id = new_id
 
@@ -93,7 +58,7 @@ class InvoiceService:
                 unit_price = float(item.get("unit_price", 0))
                 amount = quantity * unit_price
                 total_amount += amount
-                tax_code = "TAX" if idx == 0 else "NON"
+                tax_code = "RECEIPT"  # Uniform tax code for receipts.
                 line_items.append({
                     "DetailType": "SalesItemLineDetail",
                     "Amount": amount,
@@ -106,8 +71,7 @@ class InvoiceService:
                     }
                 })
 
-            print("0k0k0k0k0k")
-            doc_number = generate_doc_number("INV")
+            doc_number = generate_doc_number("REC")
             payload = {
                 "CustomerRef": {"value": valid_customer_id, "name": customer_name},
                 "AutoDocNumber": True,
@@ -119,27 +83,18 @@ class InvoiceService:
                 "PrintStatus": "NeedToPrint",
                 "DocNumber": doc_number
             }
-            logger.info(f"Invoice payload prepared for doc_number: {doc_number}")
+            logger.info(f"Receipt payload prepared for doc_number: {doc_number}")
 
-            logger.info("About to call quickbooks_request")
-            # Offload the synchronous HTTP request.
-            response = await quickbooks_request(
-                request,
-                "invoice",
-                payload=payload,
-                method="POST",
-                client_id=client_id)
-            logger.info(f"response from quickbook request: {response}")
-
+            response = quickbooks_request(request, "receipt", payload=payload, method="POST", client_id=client_id)
             if isinstance(response, dict) and "fault" in response:
                 error_msg = f"Unexpected response structure: {response}"
                 logger.error(error_msg)
                 return {"error": error_msg}
 
             if user_id:
-                invoice_record = {
+                receipt_record = {
                     "integration": "QuickBooks",
-                    "transactionType": "Invoice",
+                    "transactionType": "Receipt",
                     "transactionId": transaction_id,
                     "docNumber": doc_number,
                     "customerId": valid_customer_id,
@@ -147,18 +102,10 @@ class InvoiceService:
                     "amount": total_amount,
                     "metadata": {"syncToken": "0"}
                 }
-                await asyncio.to_thread(
-                    store_invoice_record,
-                    user_id,
-                    record_type,
-                    group_id,
-                    transaction_id,
-                    invoice_record,
-                    client_id=client_id
-                )
+                store_receipt_record(user_id, record_type, group_id, transaction_id, receipt_record, client_id=client_id)
 
             return response
 
         except Exception as e:
-            logger.error(f"Exception in send_invoice: {str(e)}")
+            logger.error(f"Exception in send_receipt: {str(e)}")
             return {"error": str(e)}

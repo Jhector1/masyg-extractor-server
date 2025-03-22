@@ -88,3 +88,38 @@ if __name__ == "__main__":
     """
     cleaned = clean_text(raw_text)
     print(cleaned)
+import re
+
+
+def get_original_filename(sanitized_filename: str) -> str:
+    """
+    Reconstructs the original filename.
+
+    If the filename has a UUID prefix (e.g., "4bf4aee4-949b-4fdf-8e13-c406b4a87879_"),
+    it is removed. Then the last underscore in the remaining string is replaced with a dot,
+    turning, for example, "invoice_S012182476_001_pdf" into "invoice_S012182476_001.pdf".
+
+    Args:
+        sanitized_filename (str): The sanitized filename to be converted.
+
+    Returns:
+        str: The reconstructed original filename.
+    """
+    if not sanitized_filename:
+        return 'unknown.unknown'
+
+    # Regex to match a UUID followed by an underscore.
+    uuid_prefix_regex = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_', re.IGNORECASE)
+
+    # Remove the UUID prefix if it exists.
+    sanitized_filename = uuid_prefix_regex.sub('', sanitized_filename)
+
+    # Find the last underscore to identify the extension separator.
+    last_underscore_index = sanitized_filename.rfind('_')
+
+    # If found, replace the last underscore with a dot.
+    if last_underscore_index != -1:
+        return sanitized_filename[:last_underscore_index] + '.' + sanitized_filename[last_underscore_index + 1:]
+
+    # If no underscore is found, return the filename as-is.
+    return sanitized_filename

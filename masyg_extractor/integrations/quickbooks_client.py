@@ -1,10 +1,11 @@
-import requests
+import httpx
 from fastapi import Request
 from typing import Optional, Dict, Any
 from masyg_extractor.services.my_log import logger
+
 QB_SANDBOX_URL = "https://sandbox-quickbooks.api.intuit.com/v3/company"
 
-def quickbooks_request(
+async def quickbooks_request(
     request: Request,
     endpoint: str,
     payload: Optional[Dict[str, Any]] = None,
@@ -12,9 +13,6 @@ def quickbooks_request(
     client_id: str = "",
     **kwargs
 ) -> Dict[str, Any]:
-    """
-    Sends an authenticated request to the QuickBooks API.
-    """
     if "access_token" not in request.session or "realm_id" not in request.session:
         raise Exception("User not authenticated")
 
@@ -29,29 +27,26 @@ def quickbooks_request(
         "Accept-Encoding": "identity"
     }
 
-    try:
-        method = method.upper()
-        if method == "GET":
-            params = payload if payload is not None else kwargs.pop("params", None)
-            response = requests.get(url, headers=headers, params=params, **kwargs)
-        elif method == "POST":
-            response = requests.post(url, headers=headers, json=payload, **kwargs)
-        elif method == "PUT":
-            response = requests.put(url, headers=headers, json=payload, **kwargs)
-        elif method == "DELETE":
-            response = requests.delete(url, headers=headers, json=payload, **kwargs)
-        else:
-            raise Exception(f"Unsupported HTTP method: {method}")
-
-        response.raise_for_status()
-        response_json = response.json()
-        logger.info(f"QuickBooks API Response: {response.status_code}")
-        return response_json
-
-    except requests.exceptions.RequestException as e:
-        error_message = f"QuickBooks API Request Failed: {str(e)}"
-        logger.error(error_message)
+    async with httpx.AsyncClient() as client:
         try:
-            return response.json()
-        except Exception:
+            method = method.upper()
+            if method == "GET":
+                params = payload if payload is not None else kwargs.pop("params", None)
+                response = await client.get(url, headers=headers, params=params, **kwargs)
+            elif method == "POST":
+                response = await client.post(url, headers=headers, json=payload, **kwargs)
+            elif method == "PUT":
+                response = await client.put(url, headers=headers, json=payload, **kwargs)
+            elif method == "DELETE":
+                response = await client.delete(url, headers=headers, json=payload, **kwargs)
+            else:
+                raise Exception(f"Unsupported HTTP method: {method}")
+
+            response.raise_for_status()
+            response_json = response.json()
+            logger.info(f"QuickBooks API Response: {response.status_code}")
+            return response_json
+        except httpx.RequestError as e:
+            error_message = f"QuickBooks API Request Failed: {str(e)}"
+            logger.error(error_message)
             return {"error": error_message}
