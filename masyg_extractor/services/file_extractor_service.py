@@ -1,4 +1,6 @@
 import asyncio
+import random
+from typing import Dict, Any
 
 import fitz
 import httpx
@@ -18,9 +20,11 @@ from io import BytesIO
 from pdf2image import convert_from_bytes
 import pytesseract
 import logging
-from masyg_extractor.services.my_log import logger
+from masyg_extractor.services.my_log import logger, send_log
+from masyg_extractor.services.progress_log import safe_emit_progress, calculate_overall_progress, GPT_PROCESSING_WEIGHT
+from masyg_extractor.utils.extensions import sio
 
- # PyMuPDF
+# PyMuPDF
 
 from masyg_extractor.utils.tool import clean_text
 
@@ -345,191 +349,141 @@ def extract_json_from_code_block(text):
         return None
 
 
-
-async def process_chunk(chunk_text):
+async def process_chunk(chunk_text, client_id, file_progress_share: float):
     """
-       Use OpenAI's GPT model (gpt-3.5-turbo) to extract data from the text in JSON format.
-       """
-    try:
-        # If text is very long, truncate to avoid exceeding token limits
-        # if len(pdf_text) > 3500:
-        #     logging.warning("Input text is too long; truncating to ~3500 characters.")
-        #     pdf_text = pdf_text[:3500]
+    Use OpenAI's GPT model (gpt-3.5-turbo) to extract data from the text in JSON format.
+    The progress for each chunk is updated in the shared progress_dict.
+    """
+    """
+     Process a text chunk with GPT. Here, we simulate progress updates in this chunk.
+     'file_progress_share' is the share of overall progress that this chunk's stage contributes.
+     """
 
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a specialized data extraction assistant. Your goal is to identify and extract all "
-                    "tabular data from the supplied text, and then present it as a well-structured and valid JSON object. "
-                    "The output should represent one receipt per file upload with the following structure: "
-                    "a top-level JSON object that includes the fields **vendor_name**, **date**, **tax**, and **line_items**. "
-                    "The `line_items` field is an array where each entry must capture these fields (or their close synonyms): "
-                    "[**item_name** (or **product_name**): if a specific item name is provided, use it; otherwise, derive a concise and Use Consistent Formatting all caps with hyphens for readability and **short one word** ex (description: New set of pedal arms	item-name: PEDAL-SET) normalized item name by extracting the most relevant keywords from the description rather than using the entire description], **category**, **description**, **quantity**, and **unit_price(without currency)**. "
-                    "If the file contains multiple rows with the same vendor (and the same date and tax), group all these rows into one receipt object by combining their line items into the `line_items` array. "
-                    "Ensure that the output is a single valid JSON object enclosed within a code block."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Text:\n{chunk_text}\n\n"
-                    "Please extract the receipt data from the text and provide the result as a valid JSON object within a code block, "
-                    "using the following format:\n\n"
-                    "```json\n"
-                    "{\n"
-                    "  \"vendor_name\": \"...\",\n"
-                    "  \"date\": \"...\",\n"
-                    "  \"tax\": \"...\",\n"
-                    "  \"line_items\": [\n"
-                    "    {\n"
-                    "      \"[item_name (or product_name): if a specific item name is provided, use it; otherwise, derive a concise and Use Consistent Formatting all caps with hyphens for readability and **short one word** ex (description: New set of pedal arms	item-name: PEDAL-SET), normalized item name by extracting the most relevant keywords from the description rather than using the entire description]\": \"...\",\n"
-                    "      \"category\": \"...\",\n"
-                    "      \"description\": \"...\",\n"
-                    "      \"quantity\": \"...\",\n"
-                    "      \"unit_price\": \"...\"\n"
-                    "    }\n"
-                    "    // additional line items as needed\n"
-                    "  ]\n"
-                    "}\n"
-                    "```"
-                ),
-            },
-        ]
+    total_steps = 5
+    local_progress = 0.0
+    for step in range(total_steps):
+        await asyncio.sleep(random.uniform(0.8, 1.5))
+        local_progress = ((step + 1) / total_steps) * 100
+        # Here, you could calculate a scaled progress: (local_progress/100)*file_progress_share
+        overall_chunk_progress = (local_progress / 100) * file_progress_share
+        await safe_emit_progress(client_id, overall_chunk_progress)
+    # Once the simulated progress is complete, perform the actual GPT call.
 
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            # model="gpt-4",
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a specialized data extraction assistant. Your goal is to identify and extract all "
+                "tabular data from the supplied text, and then present it as a well-structured and valid JSON object. "
+                "The output should represent one receipt per file upload with the following structure: "
+                "a top-level JSON object that includes the fields **vendor_name**, **date**, **tax**, and **line_items**. "
+                "The `line_items` field is an array where each entry must capture these fields (or their close synonyms): "
+                "[**item_name** (or **product_name**): if a specific item name is provided, use it; otherwise, derive a concise name], "
+                "**category**, **description**, **quantity**, and **unit_price(without currency)**. "
+                "If the file contains multiple rows with the same vendor (and the same date and tax), group all these rows "
+                "into one receipt object by combining their line items into the `line_items` array. "
+                "Ensure that the output is a single valid JSON object enclosed within a code block."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Text:\n{chunk_text}\n\n"
+                "Please extract the receipt data from the text and provide the result as a valid JSON object within a code block, "
+                "using the following format:\n\n"
+                "```json\n"
+                "{\n"
+                "  \"vendor_name\": \"...\",\n"
+                "  \"date\": \"...\",\n"
+                "  \"tax\": \"...\",\n"
+                "  \"line_items\": [\n"
+                "    {\n"
+                "      \"item_name\": \"...\",\n"
+                "      \"category\": \"...\",\n"
+                "      \"description\": \"...\",\n"
+                "      \"quantity\": \"...\",\n"
+                "      \"unit_price\": \"...\"\n"
+                "    }\n"
+                "    // additional line items as needed\n"
+                "  ]\n"
+                "}\n"
+                "```"
+            ),
+        },
+    ]
 
-            messages=messages,
-            max_tokens=1500,
-            temperature=0.0,
-            n=1,
-        )
+    # Implement retry logic for the GPT call
+    max_retries = 3
+    base_delay = 1  # seconds
+    for attempt in range(max_retries):
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                max_tokens=1500,
+                temperature=0.0,
+                n=1,
+            )
+            assistant_text = response['choices'][0]['message']['content'].strip()
+            json_content = extract_json_from_code_block(assistant_text)
+            if json_content:
+                return json_content
+            else:
+                # If json_content is None or empty, raise an error to trigger retry
+                raise ValueError("Empty JSON content")
+        except Exception as e:
+            logging.error(f"Attempt {attempt + 1} failed with error: {type(e).__name__}: {e}")
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                logging.warning(f"Retrying in {delay} seconds...")
+                await asyncio.sleep(delay)
+            else:
+                logging.error("All retry attempts failed. Returning None.")
+                return None
 
-        # Get GPT's response
-        assistant_text = response['choices'][0]['message']['content'].strip()
-        json_content = extract_json_from_code_block(assistant_text)
-        return json_content if json_content else None
 
-    except Exception as e:
-        logging.error(f"Error processing text with GPT: {type(e).__name__}: {e}")
+
+async def process_text_with_gpt(pdf_text: str, client_id: str, progress: Dict[str, float], files_count: int) -> Any:
+    """
+    Process the entire text with GPT.
+    We'll divide the GPT processing stage equally among chunks.
+    The stage weight is assumed to be 20% of overall progress.
+    """
+    pdf_text = clean_text(pdf_text)
+    if len(pdf_text) <= 0:
         return None
-    # messages = [
-    #     {
-    #         "role": "system",
-    #         "content": (
-    #             "You are a specialized data extraction assistant. Your goal is to identify and extract all "
-    #             "tabular data from the supplied text, and then present it as a well-structured and valid JSON object. "
-    #             "The output should represent one receipt per file upload with the following structure: "
-    #             "a top-level JSON object that includes the fields vendor_name, date, tax, and line_items. "
-    #             "The line_items field is an array where each entry must capture these fields (or their close synonyms): "
-    #             "[item_name (or product_name): if a specific item name is provided, use it; otherwise, derive a concise and "
-    #             "normalized item name by extracting the most relevant keywords from the description (3 words or less)], "
-    #             "category, description, quantity, and unit_price (without currency). "
-    #             "If the file contains multiple rows with the same vendor (and the same date and tax), group all these rows "
-    #             "into one receipt object by combining their line items into the line_items array. "
-    #             "Ensure that the output is a single valid JSON object enclosed within a code block."
-    #         )
-    #     },
-    #     {
-    #         "role": "user",
-    #         "content": (
-    #             f"Text:\n{chunk_text}\n\n"
-    #             "Please extract the receipt data from the text and provide the result as a valid JSON object within a code block, "
-    #             "using the following format:\n\n"
-    #             "```json\n"
-    #             "{\n"
-    #             '  "vendor_name": "...",\n'
-    #             '  "date": "...",\n'
-    #             '  "tax": "...",\n'
-    #             '  "line_items": [\n'
-    #             "    {\n"
-    #             '      "item_name": "...",\n'
-    #             '      "category": "...",\n'
-    #             '      "description": "...",\n'
-    #             '      "quantity": "...",\n'
-    #             '      "unit_price": "..." \n'
-    #             "    }\n"
-    #             "    // additional line items as needed\n"
-    #             "  ]\n"
-    #             "}\n"
-    #             "```"
-    #         )
-    #     }
-    # ]
-    #
-    # max_attempts = 3
-    # attempt = 0
-    # while attempt < max_attempts:
-    #     try:
-    #         response = await openai.ChatCompletion.acreate(
-    #             model="gpt-3.5-turbo",
-    #             messages=messages,
-    #             max_tokens=1500,
-    #             temperature=0.0,
-    #             n=1
-    #         )
-    #         assistant_text = response['choices'][0]['message']['content'].strip()
-    #         json_result = extract_json_from_code_block(assistant_text)
-    #         return json_result
-    #     except openai.error.RateLimitError as e:
-    #         attempt += 1
-    #         m = re.search(r"try again in ([\d\.]+)s", str(e))
-    #         wait_time = float(m.group(1)) if m else 10
-    #         logging.warning(f"Rate limit reached on attempt {attempt}. Waiting {wait_time}s before retrying...")
-    #         await asyncio.sleep(wait_time)
-    #     except Exception as e:
-    #         logging.error(f"Error processing chunk: {type(e).__name__}: {e}")
-    #         return None
-    # return None
-
-
-async def process_text_with_gpt(pdf_text):
-    """
-    Use OpenAI's GPT model (gpt-3.5-turbo) to extract JSON data from the PDF text.
-
-    - If the text is ≤3500 characters, process it directly.
-    - If the text is longer, split it into 3500-character chunks, process them concurrently,
-      and merge the resulting JSON objects.
-    """
-
-    pdf_text= clean_text(pdf_text)
-    # print(pdf_text)
-    if len(pdf_text) <=0:
-        return None
+    print(f"Processing chunk...")
+    gpt_stage_weight = GPT_PROCESSING_WEIGHT  # GPT stage contributes 50% to overall progress
     if len(pdf_text) <= 1500:
-        # print(pdf_text)
-        result = await process_chunk(pdf_text)
-        # print(result)
+        # Single chunk: full share for GPT stage from this file.
+        result = await process_chunk(pdf_text, client_id, gpt_stage_weight)
+        progress["gpt_processing"] = gpt_stage_weight
+        await safe_emit_progress(client_id, calculate_overall_progress(progress))
         return result
 
-    # Split text into chunks of 3500 characters
-    chunks = [pdf_text[i:i + 1500] for i in range(0, len(pdf_text), 1500)]
-    # print(chunks)
-    tasks = [process_chunk(chunk) for chunk in chunks]
+    # Multiple chunks
+    chunks = [pdf_text[i:i+1500] for i in range(0, len(pdf_text), 1500)]
+    chunk_share = gpt_stage_weight / len(chunks)
+    tasks = [process_chunk(chunk, client_id, chunk_share) for chunk in chunks]
     results = await asyncio.gather(*tasks)
-    # print(results)
-
-    # Filter out any failed (None) results
+    progress["gpt_processing"] = gpt_stage_weight
+    await safe_emit_progress(client_id, calculate_overall_progress(progress))
     results = [r for r in results if r is not None]
     if not results:
         return None
-
-    # Merge results (assume vendor_name, date, and tax are consistent)
+    # Merge results if needed (here, just return the first)
     combined_result = results[0]
-    # print(combined_result)
     for result in results[1:]:
         if "line_items" in result:
             combined_result["line_items"].extend(result.get("line_items", []))
     return combined_result
 
 
-def process_text_with_gpt_sync(pdf_text):
-    """
-    Synchronous wrapper for process_text_with_gpt.
-    """
-    return asyncio.run(process_text_with_gpt(pdf_text))
+# def process_text_with_gpt_sync(pdf_text):
+#     """
+#     Synchronous wrapper for process_text_with_gpt.
+#     """
+#     return asyncio.run(process_text_with_gpt(pdf_text))
 
 
 # Example usage:

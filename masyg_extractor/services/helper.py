@@ -1,3 +1,5 @@
+from typing import Dict
+
 from fastapi import FastAPI
 from fastapi_mail import FastMail, ConnectionConfig
 import os
@@ -15,3 +17,4 @@ def init_mail(app: FastAPI):
         VALIDATE_CERTS=os.getenv('FAST_API_ENV')=='production'   # Disable cert validation (only for dev)
     )
     app.state.mail = FastMail(config)
+

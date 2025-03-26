@@ -16,6 +16,35 @@ router = APIRouter(prefix="/integrations/quickbook")
 router.include_router(auth_router, prefix="", tags=["QuickBooks Auth"])
 
 
+# Assume that sio is a shared Socket.IO server instance properly initialized
+# For demonstration purposes, we'll define a dummy sio with an async emit method.
+class DummySIO:
+    async def emit(self, event: str, data: dict, room: str):
+        print(f"Emitting event '{event}' with data {data} to room {room}")
+        # Simulate some I/O delay
+        # await asyncio.sleep(0.05)
+
+sio = DummySIO()
+
+# Define asynchronous locks for shared operations
+sio_lock = asyncio.Lock()
+log_lock = asyncio.Lock()
+
+# Synchronized function for emitting progress updates
+async def safe_emit(event: str, data: dict, room: str):
+    async with sio_lock:
+        await sio.emit(event, data, room=room)
+
+# Simulated logging function (could be writing to a file, database, etc.)
+
+
+# Synchronized function for logging
+async def safe_log(message: str, user_room: str):
+    async with log_lock:
+        await send_log(message, user_room)
+
+
+
 async def normalize_payload(data, record_key: str) -> list:
     """
     Normalize the payload into a list of record dictionaries.
@@ -67,8 +96,8 @@ async def process_single_record(
       - Log outcomes and return the response or error
     """
     progress = (100 / total) * (idx + 1)
-    await sio.emit("progress_update", {"progress": progress}, room=client_id)
-    await asyncio.sleep(.01)
+    await safe_emit("progress_update", {"progress": progress}, room=client_id)
+    await asyncio.sleep(0.0)
 
     customer_id = item.get("customer_id", "").strip()
     customer_name = item.get("customer_name", "").strip()
@@ -158,7 +187,6 @@ async def send_invoice_route(request: Request):
     logger.info(f"Client ID: {client_id}")
     firebase_user = request.session.get("user")
     if not firebase_user or not firebase_user.get("userId"):
-        asyncio.create_task(send_log("User not authenticated", user_room=client_id))
         return JSONResponse({"error": "User not authenticated", "uploads": []}, status_code=401)
 
     user_id = firebase_user.get("userId")

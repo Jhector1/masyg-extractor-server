@@ -109,8 +109,8 @@ def setup_google_credentials():
     # Decode the base64 string
     try:
         credentials_json = base64.b64decode(credentials_base64).decode("utf-8")
-        print("Decoded JSON Length:", len(credentials_json))  # Debugging: log length
-        print("Decoded JSON (partial):", credentials_json[:100])  # Debugging: log preview
+        # print("Decoded JSON Length:", len(credentials_json))  # Debugging: log length
+        # print("Decoded JSON (partial):", credentials_json[:100])  # Debugging: log preview
     except Exception as e:
         raise Exception(f"Failed to decode base64: {str(e)}")
 
@@ -119,7 +119,7 @@ def setup_google_credentials():
     try:
         with open(credentials_path, "w") as file:
             file.write(credentials_json)
-        print("Credentials written to:", credentials_path)  # Debugging
+        # print("Credentials written to:", credentials_path)  # Debugging
     except Exception as e:
         raise Exception(f"Failed to write credentials file: {str(e)}")
 
@@ -142,8 +142,8 @@ setup_google_credentials()
 def test_google_vision():
     try:
         client = vision.ImageAnnotatorClient()
-        print("Google Cloud Vision client initialized successfully.")
+        # print("Google Cloud Vision client initialized successfully.")
     except Exception as e:
         raise Exception(f"Failed to initialize Vision API client: {str(e)}")
 
-test_google_vision()
+# test_google_vision()

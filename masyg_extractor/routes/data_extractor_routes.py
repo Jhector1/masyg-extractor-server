@@ -3,7 +3,7 @@ import io
 import base64
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Dict
 
 from fastapi import APIRouter, Request, UploadFile, File, Depends, status
 
@@ -21,6 +21,8 @@ from masyg_extractor.services.firestore_helpers import (
     document_delete,
     stream_collection,
 )
+from masyg_extractor.services.progress_log import safe_emit_progress, get_file_progress_dict, \
+    calculate_overall_progress, _last_emitted_overall
 from masyg_extractor.utils.extensions import sio
 from masyg_extractor.services.dependencies import get_firebase_user, generate_group_id
 from masyg_extractor.services.my_log import send_log, logger
@@ -31,17 +33,16 @@ router = APIRouter(prefix="/extractor")
 async def extract_data(
     request: Request,
     files: List[UploadFile] = File(...),
-    firebase_user: dict = Depends(get_firebase_user)
+    firebase_user: dict = Depends(get_firebase_user),
+        global_progress: Dict[str, float] = Depends(get_file_progress_dict)
 ):
 
 
-    client_id = request.session.get("client_id")
-    if client_id is None:
-        client_id ='Guest'
-    print('fffffffff',client_id)
+    client_id = request.session.get("client_id") or 'Guest'
+    _last_emitted_overall.pop(client_id, None)
+
     user_id = firebase_user.get('userId')
-    await sio.emit("progress_update", {"progress": 10}, room=client_id)
-    await asyncio.sleep(0.2)  # simulate a short wait
+    # await safe_emit_progress(client_id, calculate_overall_progress(global_progress))
 
     # print(user_id)
     if not user_id:
@@ -62,8 +63,8 @@ async def extract_data(
     for filename, data in file_contents.items():
         logging.debug(f"File {filename} size: {len(data)} bytes")
 
-    results = await process_files_in_parallel(files, user_id, group_id, client_id)
-    print(results)
+    results = await process_files_in_parallel(files, user_id, group_id, client_id, global_progress)
+    # print(results)
 
     # Compress and encode files.
     files_metadata = []
@@ -97,6 +98,8 @@ async def extract_data(
         'upload_time': datetime.now().isoformat(),
         'file_count': len(files)-failed_file_quant,
         'group_name': group_id,
+        'isViewed': False
+
     }
     group_doc_ref.set({'metadata': metadata})
 
@@ -377,3 +380,50 @@ async def delete_all_data(
     return JSONResponse(content={'message': 'All your data has been deleted successfully'}, status_code=200)
 
 
+@router.patch("/update_view", status_code=200)
+async def update_view_status(
+        request: Request,
+        firebase_user: dict = Depends(get_firebase_user)
+):
+    """
+    Updates the view status of a group by setting its metadata.isViewed field to True.
+    Expects a JSON payload with a "groupId" key.
+    """
+    user_id = firebase_user.get("userId")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User ID not found"
+        )
+
+    try:
+        payload = await request.json()
+        group_id = payload.get("groupId")
+        if not group_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing groupId in request body"
+            )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid request payload"
+        )
+
+    client = await get_firestore_client()
+    group_doc_ref = client.collection("users").document(user_id) \
+        .collection("groups").document(group_id)
+    group_snapshot = await document_get(group_doc_ref)
+    if not group_snapshot.exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Group not found"
+        )
+
+    # Update the view status by setting metadata.isViewed to True.
+    await document_update(group_doc_ref, {"metadata.isViewed": True})
+
+    return JSONResponse(
+        content={"message": "Group view status updated successfully."},
+        status_code=200
+    )
