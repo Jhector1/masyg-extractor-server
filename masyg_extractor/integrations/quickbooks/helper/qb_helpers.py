@@ -2,7 +2,7 @@ import asyncio
 from typing import Optional, Dict, Any
 from fastapi import Request
 from masyg_extractor.services.my_log import logger, send_log
-from masyg_extractor.integrations.quickbooks_client import quickbooks_request
+from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
 
 async def check_entity_exists(
     request: Request,

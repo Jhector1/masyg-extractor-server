@@ -376,10 +376,10 @@ async def process_chunk(chunk_text, client_id, file_progress_share: float):
                 "You are a specialized data extraction assistant. Your goal is to identify and extract all "
                 "tabular data from the supplied text, and then present it as a well-structured and valid JSON object. "
                 "The output should represent one receipt per file upload with the following structure: "
-                "a top-level JSON object that includes the fields **vendor_name**, **date**, **tax**, and **line_items**. "
+                "a top-level JSON object that includes the fields **vendor_name**, **date**, and **line_items**. "
                 "The `line_items` field is an array where each entry must capture these fields (or their close synonyms): "
-                "[**item_name** (or **product_name**): if a specific item name is provided, use it; otherwise, derive a concise name], "
-                "**category**, **description**, **quantity**, and **unit_price(without currency)**. "
+                "[**item_name** (or **product_name**): if a specific item name is provided, use it; otherwise, derive a concise name not more than 3 words], "
+                "**category**, **description**, **quantity**, **tax**(NON or TAX) **sku**: generate one if not provided 3 descriptive letter of ItemName and 5-random-digit (TLP-45035), and **unit_price(without currency)**. "
                 "If the file contains multiple rows with the same vendor (and the same date and tax), group all these rows "
                 "into one receipt object by combining their line items into the `line_items` array. "
                 "Ensure that the output is a single valid JSON object enclosed within a code block."
@@ -395,13 +395,14 @@ async def process_chunk(chunk_text, client_id, file_progress_share: float):
                 "{\n"
                 "  \"vendor_name\": \"...\",\n"
                 "  \"date\": \"...\",\n"
-                "  \"tax\": \"...\",\n"
                 "  \"line_items\": [\n"
                 "    {\n"
                 "      \"item_name\": \"...\",\n"
                 "      \"category\": \"...\",\n"
                 "      \"description\": \"...\",\n"
                 "      \"quantity\": \"...\",\n"
+                "      \"tax\": \"...\",\n"
+                "      \"sku\": \"...\",\n"
                 "      \"unit_price\": \"...\"\n"
                 "    }\n"
                 "    // additional line items as needed\n"
@@ -558,3 +559,27 @@ def process_text_with_nlp(pdf_text):
     except Exception as e:
         logging.error(f"Error processing text with NLP: {type(e).__name__}: {e}")
         return None
+
+
+import re
+
+
+def remove_non_alphanumeric(text):
+    """
+    Removes any character from the input text that is not a letter, a digit, or a space.
+
+    Args:
+        text (str): The input string to be cleaned.
+
+    Returns:
+        str: A string containing only letters, digits, and spaces.
+    """
+    # The regular expression [^A-Za-z0-9 ] matches any character that is NOT a letter, digit, or space.
+    return re.sub(r'[^A-Za-z0-9 ]', '', text)
+
+
+# Example usage:
+if __name__ == "__main__":
+    sample_text = "Hello, World! 123. @$%"
+    cleaned_text = remove_non_alphanumeric(sample_text)
+    print(cleaned_text)  # Output: "Hello World 123"

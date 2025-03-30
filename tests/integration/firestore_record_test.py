@@ -31,7 +31,7 @@ class TestFirestoreRecords(TestCase):
         patcher.start()
 
         # Import logger from quickbooks_client.
-        from masyg_extractor.integrations.quickbooks_client import logger
+        from masyg_extractor.integrations.quickbooks.quickbooks_client import logger
         self.logger = logger
 
     # --- Helper methods to set up explicit Firestore chain mocks ---

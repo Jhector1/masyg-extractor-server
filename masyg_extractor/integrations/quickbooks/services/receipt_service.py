@@ -2,14 +2,14 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from fastapi import Request
 from masyg_extractor.services.my_log import logger, send_log
-from masyg_extractor.integrations.quickbooks_client import quickbooks_request
-from masyg_extractor.integrations.repository.firestore_repository import (
+from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
+from masyg_extractor.integrations.quickbooks.repository.firestore_repository import (
     store_invoice_record,  # Reuse this function for both invoices and receipts
     invoice_exists_in_firestore
 )
-from masyg_extractor.integrations.services.customer_service import get_or_create_customer
-from masyg_extractor.integrations.services.item_service import check_item_exists, create_item
-from masyg_extractor.integrations.helper.transaction_helpers import generate_doc_number, check_duplicate_record
+from masyg_extractor.integrations.quickbooks.services.customer_service import get_or_create_customer
+from masyg_extractor.integrations.quickbooks.services.item_service import check_item_exists, create_item
+from masyg_extractor.integrations.transaction_helpers import generate_doc_number, check_duplicate_record
 from masyg_extractor.utils.tool import get_original_filename
 
 

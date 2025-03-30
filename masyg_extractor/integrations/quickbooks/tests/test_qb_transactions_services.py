@@ -17,14 +17,7 @@ from masyg_extractor.integrations.services.invoice_service import InvoiceService
 from masyg_extractor.integrations.services.item_service import (
     check_item_exists, create_item, ItemService
 )
-from masyg_extractor.integrations.repository.firestore_repository import (
-    store_customer_record, customer_exists_in_firestore,
-    store_vendor_record, vendor_exists_in_firestore,
-    store_receipt_record, receipt_exists_in_firestore,
-    store_bill_record, bill_exists_in_firestore,
-    store_invoice_record, invoice_exists_in_firestore
-)
-from masyg_extractor.integrations.quickbooks_client import quickbooks_request
+from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
 
 # Import the transaction helpers
 from masyg_extractor.integrations.helper.transaction_helpers import generate_doc_number, check_duplicate_record

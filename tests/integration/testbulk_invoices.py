@@ -30,7 +30,7 @@ class TestBulkSendInvoices(unittest.TestCase):
             create=True
         )
         self.mock_session = self.session_patch.start()
-        from masyg_extractor.integrations.quickbooks_client import logger
+        from masyg_extractor.integrations.quickbooks.quickbooks_client import logger
         self.logger = logger
 
     def tearDown(self):

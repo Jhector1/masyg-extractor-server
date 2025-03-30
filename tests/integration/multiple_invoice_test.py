@@ -13,7 +13,7 @@ firebase_init()
 
 # Now import modules that use Firebase.
 from masyg_extractor.integrations.services.invoice_service import InvoiceService
-from masyg_extractor.integrations.quickbooks_client import logger
+from masyg_extractor.integrations.quickbooks.quickbooks_client import logger
 
 # Set up logging.
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")

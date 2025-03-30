@@ -2,12 +2,12 @@ import asyncio
 from typing import Optional
 from fastapi import Request
 from masyg_extractor.services.my_log import logger, send_log
-from masyg_extractor.integrations.quickbooks_client import quickbooks_request
-from masyg_extractor.integrations.repository.firestore_repository import (
+from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
+from masyg_extractor.integrations.quickbooks.repository.firestore_repository import (
     store_vendor_record,
     vendor_exists_in_firestore
 )
-from masyg_extractor.integrations.helper.qb_helpers import check_entity_exists, fetch_entity_id_by_name, create_entity
+from masyg_extractor.integrations.quickbooks.helper.qb_helpers import check_entity_exists, fetch_entity_id_by_name, create_entity
 
 
 class VendorService:

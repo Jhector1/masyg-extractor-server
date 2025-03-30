@@ -30,7 +30,7 @@ class TestFirestoreRecords(TestCase):
         from masyg_extractor.services import global_executor
         if global_executor.MAIN_LOOP is None:
             global_executor.MAIN_LOOP = asyncio.new_event_loop()
-        import masyg_extractor.integrations.quickbooks_client as qb_data
+        import masyg_extractor.integrations.quickbooks.quickbooks_client as qb_data
         qb_data.MAIN_LOOP = global_executor.MAIN_LOOP
 
         # Patch MAIN_LOOP in the module under test (if needed)
@@ -38,7 +38,7 @@ class TestFirestoreRecords(TestCase):
         self.addCleanup(patcher.stop)
         patcher.start()
 
-        from masyg_extractor.integrations.quickbooks_client import logger
+        from masyg_extractor.integrations.quickbooks.quickbooks_client import logger
         self.logger = logger
 
     # --- Helper methods to set up explicit Firestore chain mocks ---

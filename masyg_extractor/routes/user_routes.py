@@ -173,7 +173,7 @@ async def login(request: Request):
             'hasUsedTrial': user_found.get('hasUsedTrial')
         }
 
-        # await sio.emit('log_message', {'data': '✅Login successful!'}, room=clientId)
+        await sio.emit('log_message', {'data': '✅Login successful!'}, room=clientId)
         print("Client ID", clientId)
         # await sio.emit("welcome", {"message": f"Welcome, {clientId}!"}, room=clientId)
         asyncio.create_task(send_log( '✅Login successful!', user_room=clientId))

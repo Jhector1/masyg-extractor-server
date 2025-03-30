@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
-from masyg_extractor.integrations.qb_router  import router as quickbook_router
+from masyg_extractor.integrations.quickbooks.qb_router  import router as quickbook_router
+from masyg_extractor.integrations.xero.xero_router  import router as xero_router
 
 from .admin.admin_webhook import router as webhook_router
 
@@ -19,4 +20,8 @@ def register_routers(app: FastAPI):
 
     # Include QuickBooks API router under a different prefix
     app.include_router(quickbook_router, prefix="")
+
+    # Include Xero API router under a different prefix
+
+    app.include_router(xero_router, prefix="")
     # app.include_router(quickbook_auth_router, prefix="/api")

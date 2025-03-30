@@ -12,13 +12,13 @@ import logging
 import uuid
 import logging
 
-logging.getLogger("uvicorn").setLevel(logging.WARNING)
-logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-logging.getLogger("socketio.server").setLevel(logging.WARNING)
-logging.getLogger("engineio.server").setLevel(logging.WARNING)
-# For HTTP client libraries (like httpx):
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# logging.getLogger("uvicorn").setLevel(logging.WARNING)
+# logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+# logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+# logging.getLogger("socketio.server").setLevel(logging.WARNING)
+# logging.getLogger("engineio.server").setLevel(logging.WARNING)
+# # For HTTP client libraries (like httpx):
+# logging.getLogger("httpx").setLevel(logging.WARNING)
 
 import stripe
 import asyncio

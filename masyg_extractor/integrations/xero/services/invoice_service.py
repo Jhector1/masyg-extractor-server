@@ -2,14 +2,14 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from fastapi import Request
 from masyg_extractor.services.my_log import logger, send_log
-from masyg_extractor.integrations.quickbooks_client import quickbooks_request
-from masyg_extractor.integrations.repository.firestore_repository import (
+from masyg_extractor.integrations.xero.xero_client import xero_request
+from masyg_extractor.integrations.xero.repository.firestore_repository import (
     store_invoice_record,
     invoice_exists_in_firestore
 )
-from masyg_extractor.integrations.services.customer_service import get_or_create_customer
-from masyg_extractor.integrations.services.item_service import check_item_exists, create_item
-from masyg_extractor.integrations.helper.transaction_helpers import generate_doc_number, check_duplicate_record
+from masyg_extractor.integrations.xero.services.customer_services import get_or_create_customer
+from masyg_extractor.integrations.xero.services.item_services import check_item_exists, create_item
+from masyg_extractor.integrations.transaction_helpers import generate_doc_number, check_duplicate_record
 from masyg_extractor.utils.tool import get_original_filename
 
 
@@ -28,11 +28,9 @@ class InvoiceService:
             client_id: str = ""
     ) -> Dict[str, Any]:
         """
-        Asynchronously creates an invoice in QuickBooks and stores key invoice info in Firestore.
+        Asynchronously creates an invoice in Xero and stores key invoice info in Firestore.
         """
-        print("Type of invoice_exists_in_firestore:", type(invoice_exists_in_firestore))
         try:
-            print("0k0k0k0k0k")
             if not group_id or group_id.strip() == "":
                 return {"error": "Group ID is required for invoice creation."}
 
@@ -47,13 +45,12 @@ class InvoiceService:
                 client_id
             )
             if dup.get("error"):
-                msg = f"{record_type.capitalize()} for ({get_original_filename(transaction_id)}) already recorded in QuickBooks."
-                # Log asynchronously without blocking the current execution.
+                msg = f"{record_type.capitalize()} for ({get_original_filename(transaction_id)}) already recorded in Xero."
                 await send_log(f"❌ {msg}", user_room=client_id)
-                asyncio.sleep(1)
+                await asyncio.sleep(1)
                 return dup
 
-            # Offload customer lookup/creation.
+            # Offload customer lookup/creation using Xero contacts.
             valid_customer_id = await get_or_create_customer(
                 request,
                 customer_id,
@@ -61,8 +58,7 @@ class InvoiceService:
                 user_id,
                 client_id=client_id
             )
-            # logger.info(f"Using customer ID: {valid_customer_id}")
-            # print("0k0k0k0k0k")
+
             if not items:
                 logger.info("No items provided for invoice.")
                 return {"error": "Items required for invoice creation."}
@@ -70,14 +66,13 @@ class InvoiceService:
             line_items = []
             total_amount = 0.0
             for idx, item in enumerate(items):
-                # print("0k0k0k0k0k")
                 item_name = item.get("item_name")
                 item_id = item.get("item_id")
                 exists = await check_item_exists(
-                    item_name,
-                    item_id,
-                    client_id=client_id,
-                    request=request
+                    request=request,
+                    item_name=item_name,
+                    item_id=item_id,
+                    client_id=client_id
                 )
                 if not exists:
                     logger.info(f"Item '{item_name}' not found; creating new item.")
@@ -93,55 +88,57 @@ class InvoiceService:
                 unit_price = float(item.get("unit_price", 0))
                 amount = quantity * unit_price
                 total_amount += amount
-                tax_code = "TAX" if idx == 0 else "NON"
+
+                # For Xero, build a line item with required fields.
+                # Assume a default AccountCode of "200" and set TaxType based on your business rules.
+                tax_type = "OUTPUT" if idx == 0 else "NONE"
                 line_items.append({
-                    "DetailType": "SalesItemLineDetail",
-                    "Amount": amount,
                     "Description": item.get("description", "No description"),
-                    "SalesItemLineDetail": {
-                        "ItemRef": {"value": item_id},
-                        "Qty": int(quantity),
-                        "UnitPrice": unit_price,
-                        "TaxCodeRef": {"value": tax_code}
-                    }
+                    "Quantity": quantity,
+                    "UnitAmount": unit_price,
+                    "AccountCode": item.get("account_code", "200"),
+                    "TaxType": tax_type
                 })
 
-            print("0k0k0k0k0k")
             doc_number = generate_doc_number("INV")
+            # Construct the Xero invoice payload.
             payload = {
-                "CustomerRef": {"value": valid_customer_id, "name": customer_name},
-                "AutoDocNumber": True,
-                "EmailStatus": "NotSet",
-                "Line": line_items,
-                "TotalAmt": total_amount,
-                "TxnDate": date,
-                "CurrencyRef": {"value": "USD"},
-                "PrintStatus": "NeedToPrint",
-                "DocNumber": doc_number
+                "Type": "ACCREC",
+                "Contact": {
+                    "ContactID": valid_customer_id,
+                    "Name": customer_name
+                },
+                "Date": date,
+                "DueDate": date,  # Optionally adjust to a calculated due date.
+                "LineItems": line_items,
+                "InvoiceNumber": doc_number,
+                "Status": "AUTHORISED",
+                "CurrencyCode": "USD"
             }
-            logger.info(f"Invoice payload prepared for doc_number: {doc_number}")
+            logger.info(f"Invoice payload prepared for InvoiceNumber: {doc_number}")
 
-            logger.info("About to call quickbooks_request")
-            # Offload the synchronous HTTP request.
-            response = await quickbooks_request(
+            logger.info("About to call xero_request")
+            response = await xero_request(
                 request,
-                "invoice",
+                "Invoices",
                 payload=payload,
                 method="POST",
-                client_id=client_id)
-            logger.info(f"response from quickbook request: {response}")
+                client_id=client_id
+            )
+            logger.info(f"Response from Xero invoice creation: {response}")
 
-            if isinstance(response, dict) and "fault" in response:
+            if isinstance(response, dict) and response.get("Error"):
                 error_msg = f"Unexpected response structure: {response}"
                 logger.error(error_msg)
                 return {"error": error_msg}
 
+            # Store the invoice record in Firestore.
             if user_id:
                 invoice_record = {
-                    "integration": "QuickBooks",
+                    "integration": "Xero",
                     "transactionType": "Invoice",
                     "transactionId": transaction_id,
-                    "docNumber": doc_number,
+                    "invoiceNumber": doc_number,
                     "customerId": valid_customer_id,
                     "date": date,
                     "amount": total_amount,

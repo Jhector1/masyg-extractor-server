@@ -1,47 +1,24 @@
+import json
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime
 import asyncio
 
-from masyg_extractor.integrations.services.quickbook_service import get_entities
-from masyg_extractor.integrations.services.receipt_service import ReceiptService
-from masyg_extractor.integrations.services.invoice_service import InvoiceService
+from fastapi import  HTTPException, status
+
+import requests
+from masyg_extractor.integrations.quickbooks.services.quickbook_service import get_entities
+from masyg_extractor.integrations.quickbooks.services.receipt_service import ReceiptService
+from masyg_extractor.integrations.quickbooks.services.invoice_service import InvoiceService
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.services.my_log import send_log, logger
-from masyg_extractor.integrations.authentication.quickbook_auth import router as auth_router
-from masyg_extractor.utils.extensions import sio
+from masyg_extractor.integrations.quickbooks.authentication.quickbook_auth import router as auth_router
 from masyg_extractor.utils.tool import get_original_filename
 
 router = APIRouter(prefix="/integrations/quickbook")
 router.include_router(auth_router, prefix="", tags=["QuickBooks Auth"])
 
-
-# Assume that sio is a shared Socket.IO server instance properly initialized
-# For demonstration purposes, we'll define a dummy sio with an async emit method.
-class DummySIO:
-    async def emit(self, event: str, data: dict, room: str):
-        print(f"Emitting event '{event}' with data {data} to room {room}")
-        # Simulate some I/O delay
-        # await asyncio.sleep(0.05)
-
-sio = DummySIO()
-
-# Define asynchronous locks for shared operations
-sio_lock = asyncio.Lock()
-log_lock = asyncio.Lock()
-
-# Synchronized function for emitting progress updates
-async def safe_emit(event: str, data: dict, room: str):
-    async with sio_lock:
-        await sio.emit(event, data, room=room)
-
-# Simulated logging function (could be writing to a file, database, etc.)
-
-
-# Synchronized function for logging
-async def safe_log(message: str, user_room: str):
-    async with log_lock:
-        await send_log(message, user_room)
 
 
 
@@ -96,7 +73,7 @@ async def process_single_record(
       - Log outcomes and return the response or error
     """
     progress = (100 / total) * (idx + 1)
-    await safe_emit("progress_update", {"progress": progress}, room=client_id)
+    # await safe_emit("progress_update", {"progress": progress}, room=client_id)
     await asyncio.sleep(0.0)
 
     customer_id = item.get("customer_id", "").strip()
@@ -255,10 +232,11 @@ async def send_receipt_route(request: Request):
     print(responses)
     return JSONResponse(content=responses)
 
+
 @router.get("/get-items")
 async def get_items(request: Request):
     """
-    Retrieves items from QuickBooks.
+    Retrieves items from QuickBooks, returning only the Name and Id for each item.
     """
     access_token = request.session.get("access_token")
     realm_id = request.session.get("realm_id")
@@ -266,7 +244,7 @@ async def get_items(request: Request):
     if not access_token or not realm_id:
         return JSONResponse({"error": "User not authenticated"}, status_code=401)
 
-    from masyg_extractor.integrations.quickbooks_client import quickbooks_request
+    from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
     url_params = {"query": "SELECT * FROM Item"}
     try:
         response = await quickbooks_request(request, "query", method="GET", params=url_params)
@@ -274,41 +252,170 @@ async def get_items(request: Request):
             error_info = response["Fault"].get("Error", [{}])[0]
             error_message = error_info.get("Message", "Unknown error")
             return JSONResponse({"error": error_message, "details": response}, status_code=401)
-        return JSONResponse(response, status_code=200)
+
+        # Extract items from the QueryResponse.
+        items = response.get("QueryResponse", {}).get("Item", [])
+        # Filter each item to return only the Name and Id.
+        filtered_items = [
+            {"Name": item.get("Name"), "Id": item.get("Id")}
+            for item in items
+        ]
+        return JSONResponse(filtered_items, status_code=200)
     except Exception as e:
         logger.error(f"Error retrieving items: {str(e)}")
-        return JSONResponse({"error": "Exception while retrieving items", "details": str(e)}, status_code=500)
+        return JSONResponse(
+            {"error": "Exception while retrieving items", "details": str(e)},
+            status_code=500
+        )
 
-@router.get("/get-accounts")
-async def get_accounts(request: Request):
-    """
-    Retrieves expense accounts from QuickBooks.
-    """
-    from masyg_extractor.integrations.quickbooks_client import quickbooks_request
-    access_token = request.session.get("access_token")
-    realm_id = request.session.get("realm_id")
 
-    if not access_token:
-        return JSONResponse({"error": "User not authenticated"}, status_code=401)
+# @router.get("/get-accounts")
+# async def get_accounts(request: Request):
+#     """
+#     Retrieves expense accounts from QuickBooks.
+#     """
+#     from masyg_extractor.integrations.quickbooks_client import quickbooks_request
+#     access_token = request.session.get("access_token")
+#     realm_id = request.session.get("realm_id")
+#
+#     if not access_token:
+#         return JSONResponse({"error": "User not authenticated"}, status_code=401)
+#
+#     query = {"query": "SELECT * FROM Account WHERE AccountType = 'Expense'"}
+#     try:
+#         response = await quickbooks_request(request, "query", method="GET", params=query)
+#         return JSONResponse(response)
+#     except Exception as e:
+#         logger.error(f"Error retrieving accounts: {str(e)}")
+#         return JSONResponse({"error": "Exception while retrieving accounts", "details": str(e)}, status_code=500)
 
-    query = {"query": "SELECT * FROM Account WHERE AccountType = 'Expense'"}
-    try:
-        response = await quickbooks_request(request, "query", method="GET", params=query)
-        return JSONResponse(response)
-    except Exception as e:
-        logger.error(f"Error retrieving accounts: {str(e)}")
-        return JSONResponse({"error": "Exception while retrieving accounts", "details": str(e)}, status_code=500)
 
 @router.get("/get-customers")
 async def get_customers(request: Request):
     """
-    Fetches all customers from QuickBooks.
+    Fetches all customers from QuickBooks, returning only the Name and Id.
     """
-    return await get_entities(request, "Customer")
+    try:
+        # get_entities returns a JSONResponse containing a list of customer objects.
+        response = await get_entities(request, "Customer")
+        # Parse the JSONResponse body into a Python list.
+        customer_entities = json.loads(response.body)
+        # Filter out only the DisplayName as Name and Id.
+        filtered_customers = [
+            {"Name": customer.get("DisplayName"), "Id": customer.get("Id")}
+            for customer in customer_entities
+        ]
+        return JSONResponse(content=filtered_customers, status_code=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error processing customers: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/get-vendors")
 async def get_vendors(request: Request):
     """
     Fetches all vendors from QuickBooks.
     """
-    return await get_entities(request, "Vendor")
+    try:
+        # get_entities returns a JSONResponse containing a list of customer objects.
+        response = await get_entities(request, "Vendor")
+        # Parse the JSONResponse body into a Python list.
+        customer_entities = json.loads(response.body)
+        # Filter out only the DisplayName as Name and Id.
+        filtered_customers = [
+            {"Name": customer.get("DisplayName"), "Id": customer.get("Id")}
+            for customer in customer_entities
+        ]
+        return JSONResponse(content=filtered_customers, status_code=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error processing vendors: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+@router.get("/get-accounts")
+async def get_accounts(request: Request, account_types: str = None):
+    """
+    Fetches accounts from QuickBooks, returning only the Name and Id.
+
+    Optional Query Parameter:
+    - account_types: A comma-separated list of account types to filter by.
+      For example: "Income,Cost of Goods Sold"
+    If omitted, returns all accounts.
+    """
+    # Access session from the request (ensure SessionMiddleware is added in your app)
+    session = request.session
+    realm_id = session.get("realm_id")
+    access_token = session.get("access_token")
+
+    if not realm_id or not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not authenticated"
+        )
+
+    url = f"https://sandbox-quickbooks.api.intuit.com/v3/company/{realm_id}/query"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json"
+    }
+
+    if account_types:
+        # Split and quote each account type for the SQL IN clause
+        types_list = [t.strip() for t in account_types.split(",") if t.strip()]
+        quoted_types = ", ".join([f"'{t}'" for t in types_list])
+        query = f"SELECT * FROM Account WHERE AccountType IN ({quoted_types})"
+    else:
+        query = "SELECT * FROM Account"
+
+    params = {"query": query}
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()  # Raises HTTPError for 4xx/5xx responses
+        data = response.json()
+        accounts = data.get("QueryResponse", {}).get("Account", [])
+        # Filter the accounts to include only the Name and Id properties.
+        filtered_accounts = [
+            {"Name": account.get("Name"), "Id": account.get("Id")}
+            for account in accounts
+        ]
+        return JSONResponse(content=filtered_accounts, status_code=status.HTTP_200_OK)
+
+    except requests.exceptions.HTTPError:
+        try:
+            error_details = response.json()
+        except Exception:
+            error_details = {}
+        raise HTTPException(
+            status_code=response.status_code,
+            detail={
+                "error": "Failed to fetch accounts",
+                "details": error_details
+            }
+        )
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred: {str(err)}"
+        )
+
+
+# New endpoint to get only Income Accounts
+@router.get("/get-income-accounts")
+async def get_income_accounts(request: Request):
+    """
+    Fetches only Income Accounts from QuickBooks.
+    """
+    # "Income" is the account type for income accounts.
+    return await get_accounts(request, account_types="Income")
+
+# New endpoint to get only Expense Accounts
+@router.get("/get-expense-accounts")
+async def get_expense_accounts(request: Request):
+    """
+    Fetches only Expense Accounts (e.g., Cost of Goods Sold) from QuickBooks.
+    """
+    # You may adjust the account type filter based on your QuickBooks configuration.
+    # "Cost of Goods Sold" is a common type for expense accounts used in item costing.
+    return await get_accounts(request, account_types="Cost of Goods Sold")
