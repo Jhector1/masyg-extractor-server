@@ -5,19 +5,22 @@ from masyg_extractor.services.my_log import logger
 
 QB_SANDBOX_URL = "https://sandbox-quickbooks.api.intuit.com/v3/company"
 
+
 async def quickbooks_request(
-    request: Request,
-    endpoint: str,
-    payload: Optional[Dict[str, Any]] = None,
-    method: str = "POST",
-    client_id: str = "",
-    **kwargs
+        request: Request,
+        endpoint: str,
+        payload: Optional[Dict[str, Any]] = None,
+        method: str = "POST",
+        client_id: str = "",
+        **kwargs
 ) -> Dict[str, Any]:
-    if "access_token" not in request.session or "realm_id" not in request.session:
+    # Retrieve QuickBooks authentication data from a dedicated namespace.
+    qb_data = request.session.get("quickbooks")
+    if not qb_data or "access_token" not in qb_data or "realm_id" not in qb_data:
         raise Exception("User not authenticated")
 
-    access_token = request.session["access_token"]
-    realm_id = request.session["realm_id"]
+    access_token = qb_data["access_token"]
+    realm_id = qb_data["realm_id"]
     url = f"{QB_SANDBOX_URL}/{realm_id}/{endpoint}?minorversion=75"
 
     headers = {

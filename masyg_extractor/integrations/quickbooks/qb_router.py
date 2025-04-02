@@ -1,13 +1,12 @@
 import json
-
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
 from datetime import datetime
 import asyncio
-
-from fastapi import  HTTPException, status
-
 import requests
+import base64
+
+from fastapi import APIRouter, Request, HTTPException, status
+from fastapi.responses import JSONResponse
+
 from masyg_extractor.integrations.quickbooks.services.quickbook_service import get_entities
 from masyg_extractor.integrations.quickbooks.services.receipt_service import ReceiptService
 from masyg_extractor.integrations.quickbooks.services.invoice_service import InvoiceService
@@ -18,8 +17,6 @@ from masyg_extractor.utils.tool import get_original_filename
 
 router = APIRouter(prefix="/integrations/quickbook")
 router.include_router(auth_router, prefix="", tags=["QuickBooks Auth"])
-
-
 
 
 async def normalize_payload(data, record_key: str) -> list:
@@ -84,25 +81,25 @@ async def process_single_record(
     transaction_id = item.get("transaction_id", "").strip()
 
     if not customer_name:
-        return { "error": "Customer name is required.", record_key: item }
+        return {"error": "Customer name is required.", record_key: item}
 
     if not date_str:
         asyncio.create_task(send_log("❌ Date is required", user_room=client_id))
-        return { "error": "Date is required.", record_key: item }
+        return {"error": "Date is required.", record_key: item}
 
     try:
         datetime.fromisoformat(date_str)
     except ValueError:
-        return { "error": "Invalid date format. Expected YYYY-MM-DD.", record_key: item }
+        return {"error": "Invalid date format. Expected YYYY-MM-DD.", record_key: item}
 
     if not group_id:
-        return { "error": "Group ID is required.", record_key: item }
+        return {"error": "Group ID is required.", record_key: item}
 
     if not line_items or not isinstance(line_items, list):
-        return { "error": "A list of line_items is required.", record_key: item }
+        return {"error": "A list of line_items is required.", record_key: item}
 
     if not transaction_id:
-        return { "error": "Transaction ID is required.", record_key: item }
+        return {"error": "Transaction ID is required.", record_key: item}
 
     try:
         response_data = await send_func(
@@ -238,11 +235,12 @@ async def get_items(request: Request):
     """
     Retrieves items from QuickBooks, returning only the Name and Id for each item.
     """
-    access_token = request.session.get("access_token")
-    realm_id = request.session.get("realm_id")
-
-    if not access_token or not realm_id:
+    # Retrieve QuickBooks auth data from a dedicated namespace.
+    qb_data = request.session.get("quickbooks")
+    if not qb_data or "access_token" not in qb_data or "realm_id" not in qb_data:
         return JSONResponse({"error": "User not authenticated"}, status_code=401)
+    access_token = qb_data.get("access_token")
+    realm_id = qb_data.get("realm_id")
 
     from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
     url_params = {"query": "SELECT * FROM Item"}
@@ -269,31 +267,10 @@ async def get_items(request: Request):
         )
 
 
-# @router.get("/get-accounts")
-# async def get_accounts(request: Request):
-#     """
-#     Retrieves expense accounts from QuickBooks.
-#     """
-#     from masyg_extractor.integrations.quickbooks_client import quickbooks_request
-#     access_token = request.session.get("access_token")
-#     realm_id = request.session.get("realm_id")
-#
-#     if not access_token:
-#         return JSONResponse({"error": "User not authenticated"}, status_code=401)
-#
-#     query = {"query": "SELECT * FROM Account WHERE AccountType = 'Expense'"}
-#     try:
-#         response = await quickbooks_request(request, "query", method="GET", params=query)
-#         return JSONResponse(response)
-#     except Exception as e:
-#         logger.error(f"Error retrieving accounts: {str(e)}")
-#         return JSONResponse({"error": "Exception while retrieving accounts", "details": str(e)}, status_code=500)
-
-
 @router.get("/get-customers")
 async def get_customers(request: Request):
     """
-    Fetches all customers from QuickBooks, returning only the Name and Id.
+    Fetches all customers from QuickBooks, returning only the DisplayName as Name and Id.
     """
     try:
         # get_entities returns a JSONResponse containing a list of customer objects.
@@ -310,17 +287,15 @@ async def get_customers(request: Request):
         logger.error(f"Error processing customers: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/get-vendors")
 async def get_vendors(request: Request):
     """
     Fetches all vendors from QuickBooks.
     """
     try:
-        # get_entities returns a JSONResponse containing a list of customer objects.
         response = await get_entities(request, "Vendor")
-        # Parse the JSONResponse body into a Python list.
         customer_entities = json.loads(response.body)
-        # Filter out only the DisplayName as Name and Id.
         filtered_customers = [
             {"Name": customer.get("DisplayName"), "Id": customer.get("Id")}
             for customer in customer_entities
@@ -329,8 +304,6 @@ async def get_vendors(request: Request):
     except Exception as e:
         logger.error(f"Error processing vendors: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
 
 
 @router.get("/get-accounts")
@@ -343,16 +316,14 @@ async def get_accounts(request: Request, account_types: str = None):
       For example: "Income,Cost of Goods Sold"
     If omitted, returns all accounts.
     """
-    # Access session from the request (ensure SessionMiddleware is added in your app)
-    session = request.session
-    realm_id = session.get("realm_id")
-    access_token = session.get("access_token")
-
-    if not realm_id or not access_token:
+    qb_data = request.session.get("quickbooks")
+    if not qb_data or "access_token" not in qb_data or "realm_id" not in qb_data:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not authenticated"
         )
+    realm_id = qb_data.get("realm_id")
+    access_token = qb_data.get("access_token")
 
     url = f"https://sandbox-quickbooks.api.intuit.com/v3/company/{realm_id}/query"
     headers = {
@@ -361,7 +332,6 @@ async def get_accounts(request: Request, account_types: str = None):
     }
 
     if account_types:
-        # Split and quote each account type for the SQL IN clause
         types_list = [t.strip() for t in account_types.split(",") if t.strip()]
         quoted_types = ", ".join([f"'{t}'" for t in types_list])
         query = f"SELECT * FROM Account WHERE AccountType IN ({quoted_types})"
@@ -372,16 +342,14 @@ async def get_accounts(request: Request, account_types: str = None):
 
     try:
         response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()  # Raises HTTPError for 4xx/5xx responses
+        response.raise_for_status()
         data = response.json()
         accounts = data.get("QueryResponse", {}).get("Account", [])
-        # Filter the accounts to include only the Name and Id properties.
         filtered_accounts = [
             {"Name": account.get("Name"), "Id": account.get("Id")}
             for account in accounts
         ]
         return JSONResponse(content=filtered_accounts, status_code=status.HTTP_200_OK)
-
     except requests.exceptions.HTTPError:
         try:
             error_details = response.json()
@@ -401,21 +369,17 @@ async def get_accounts(request: Request, account_types: str = None):
         )
 
 
-# New endpoint to get only Income Accounts
 @router.get("/get-income-accounts")
 async def get_income_accounts(request: Request):
     """
     Fetches only Income Accounts from QuickBooks.
     """
-    # "Income" is the account type for income accounts.
     return await get_accounts(request, account_types="Income")
 
-# New endpoint to get only Expense Accounts
+
 @router.get("/get-expense-accounts")
 async def get_expense_accounts(request: Request):
     """
     Fetches only Expense Accounts (e.g., Cost of Goods Sold) from QuickBooks.
     """
-    # You may adjust the account type filter based on your QuickBooks configuration.
-    # "Cost of Goods Sold" is a common type for expense accounts used in item costing.
     return await get_accounts(request, account_types="Cost of Goods Sold")

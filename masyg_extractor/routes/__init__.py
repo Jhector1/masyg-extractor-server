@@ -7,6 +7,8 @@ from .admin.admin_webhook import router as webhook_router
 
 def register_routers(app: FastAPI):
     from .data_extractor_routes import router as file_extractor_router
+    from .analytics_routes import router as analytics_router
+
     from .payment_routes import router as payment_router
     from .user_routes import router as user_router
     from masyg_extractor.dummy_endpoint.fake_http import router as fake_router
@@ -25,3 +27,5 @@ def register_routers(app: FastAPI):
 
     app.include_router(xero_router, prefix="")
     # app.include_router(quickbook_auth_router, prefix="/api")
+
+    app.include_router(analytics_router, prefix="/api")

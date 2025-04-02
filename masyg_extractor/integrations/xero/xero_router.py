@@ -1,12 +1,9 @@
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Request, HTTPException, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from datetime import datetime
 import asyncio
-
-
-
-from fastapi import HTTPException, status
-
+import requests
+import base64
 
 from masyg_extractor.integrations.xero.services.invoice_service import InvoiceService
 from masyg_extractor.integrations.xero.authentication.xero_auth import router as auth_router
@@ -105,16 +102,16 @@ async def process_single_record(
         if "error" not in response_data:
             asyncio.create_task(
                 send_log(
-                    f"✅ {record_key.capitalize()} sent and processed {get_original_filename(transaction_id)} for {customer_name} successfully",
+                    f"✅ Invoice sent and processed {get_original_filename(transaction_id)} for {customer_name} successfully",
                     user_room=client_id
                 )
             )
         return response_data
     except Exception as e:
-        error_msg = f"❌ Failed to process {record_key} for {get_original_filename(transaction_id)}"
+        error_msg = f"❌ Failed to process invoice for {get_original_filename(transaction_id)}"
         asyncio.create_task(send_log(error_msg, user_room=client_id))
         return {
-            "error": f"Failed to send {record_key}",
+            "error": f"Failed to send invoice",
             "details": str(e),
             record_key: item
         }
@@ -181,42 +178,40 @@ async def send_invoice_route(request: Request):
 @router.get("/get-items")
 async def get_items(request: Request):
     """
-    Retrieves items from Xero.
+    Retrieves items from Xero, returning only the Name and Id for each item.
     """
-    print("Ustart")
-    # print("xero session", request.session.get("xero_tenant_id" ), request.session.get("xero_access_token" ))
-    if "xero_access_token" not in request.session or "xero_tenant_id" not in request.session:
-        print("User not authenticated")
+    xero_data = request.session.get("xero")
+    if not xero_data or "access_token" not in xero_data or "tenant_id" not in xero_data:
         return JSONResponse({"error": "User not authenticated"}, status_code=401)
     try:
-        print(909877)
         response = await xero_request(request, "Items", method="GET")
-        # Xero returns items in a list under "Items"
-        print('------',str(response))
-        print(909877)
-        print(response)
-        return JSONResponse(response, status_code=200)
+        # Assuming the response contains an "Items" key with the list of items
+        items = response.get("Items", [])
+        filtered_items = [
+            {"Name": item.get("Name"), "Id": item.get("ItemID")}
+            for item in items
+        ]
+        return JSONResponse(filtered_items, status_code=200)
     except Exception as e:
-        print("eeror", e)
         logger.error(f"Error retrieving items: {str(e)}")
-        return JSONResponse({"error": "Exception while retrieving items", "details": str(e)}, status_code=500)
+        return JSONResponse(
+            {"error": "Exception while retrieving items", "details": str(e)},
+            status_code=500
+        )
 
 
 @router.get("/get-customers")
 async def get_customers(request: Request):
     """
-    Fetches all customers (Contacts marked as customers) from Xero,
-    returning only the Name and the ContactID as Id.
+    Fetches all customers (Contacts marked as customers) from Xero.
     """
-    if "xero_access_token" not in request.session or "xero_tenant_id" not in request.session:
+    xero_data = request.session.get("xero")
+    if not xero_data or "access_token" not in xero_data or "tenant_id" not in xero_data:
         return JSONResponse({"error": "User not authenticated"}, status_code=401)
-    # In Xero, customers are Contacts with IsCustomer == true.
-    params = {"where": f'IsCustomer={True}'}
+    params = {"where": 'IsCustomer=true'}
     try:
         response = await xero_request(request, "Contacts", method="GET", params=params)
-        # Assuming the response has a key "Contacts" which is a list of customer dicts.
         customers = response.get("Contacts", [])
-        # Create a list with only Name and Id (using ContactID as Id)
         filtered_customers = [
             {"Name": customer.get("Name"), "Id": customer.get("ContactID")}
             for customer in customers
@@ -224,10 +219,7 @@ async def get_customers(request: Request):
         return JSONResponse(filtered_customers, status_code=200)
     except Exception as e:
         logger.error(f"Error retrieving customers: {str(e)}")
-        return JSONResponse(
-            {"error": "Exception while retrieving customers", "details": str(e)},
-            status_code=500,
-        )
+        return JSONResponse({"error": "Exception while retrieving customers", "details": str(e)}, status_code=500)
 
 
 @router.get("/get-supplier")
@@ -235,21 +227,18 @@ async def get_vendors(request: Request):
     """
     Fetches all vendors (Contacts marked as suppliers) from Xero.
     """
-    if "xero_access_token" not in request.session or "xero_tenant_id" not in request.session:
+    xero_data = request.session.get("xero")
+    if not xero_data or "access_token" not in xero_data or "tenant_id" not in xero_data:
         return JSONResponse({"error": "User not authenticated"}, status_code=401)
-    # In Xero, vendors are Contacts with IsSupplier == true.
-    params = {"where": f'IsSupplier={True}'}
+    params = {"where": 'IsSupplier=true'}
     try:
         response = await xero_request(request, "Contacts", method="GET", params=params)
         suppliers = response.get("Contacts", [])
-        # Create a list with only Name and Id (using ContactID as Id)
         filtered_suppliers = [
             {"Name": customer.get("Name"), "Id": customer.get("ContactID")}
             for customer in suppliers
         ]
         return JSONResponse(filtered_suppliers, status_code=200)
-
-        return JSONResponse(response, status_code=200)
     except Exception as e:
         logger.error(f"Error retrieving vendors: {str(e)}")
         return JSONResponse({"error": "Exception while retrieving vendors", "details": str(e)}, status_code=500)
@@ -265,19 +254,18 @@ async def get_accounts(request: Request, account_types: str = None):
       For example: "REVENUE,EXPENSE"
     If omitted, returns all accounts.
     """
-    if "xero_access_token" not in request.session or "xero_tenant_id" not in request.session:
+    xero_data = request.session.get("xero")
+    if not xero_data or "access_token" not in xero_data or "tenant_id" not in xero_data:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not authenticated")
 
     params = {}
     if account_types:
         types_list = [t.strip() for t in account_types.split(",") if t.strip()]
-        # Xero filtering: join multiple conditions with ' OR '
         where_clause = " OR ".join([f'Type=="{t}"' for t in types_list])
         params["where"] = where_clause
 
     try:
         response = await xero_request(request, "Accounts", method="GET", params=params)
-        # Xero returns accounts under "Accounts"
         accounts = response.get("Accounts", [])
         return JSONResponse(content=accounts, status_code=status.HTTP_200_OK)
     except Exception as err:
@@ -292,7 +280,7 @@ async def get_income_accounts(request: Request):
     """
     Fetches only Income Accounts (typically REVENUE) from Xero.
     """
-    return await get_accounts(request, Type="REVENUE")
+    return await get_accounts(request, account_types="REVENUE")
 
 
 @router.get("/get-expense-accounts")
@@ -300,4 +288,4 @@ async def get_expense_accounts(request: Request):
     """
     Fetches only Expense Accounts from Xero.
     """
-    return await get_accounts(request, Type="EXPENSE")
+    return await get_accounts(request, account_types="EXPENSE")

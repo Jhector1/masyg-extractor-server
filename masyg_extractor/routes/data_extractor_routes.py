@@ -37,8 +37,8 @@ async def extract_data(
         global_progress: Dict[str, float] = Depends(get_file_progress_dict)
 ):
 
-
     client_id = request.session.get("client_id") or 'Guest'
+    print(",,,,,,,,",request.session.get("client_id"))
     _last_emitted_overall.pop(client_id, None)
 
     user_id = firebase_user.get('userId')
@@ -168,10 +168,14 @@ async def update_change_log(request: Request, firebase_user: dict = Depends(get_
     except Exception as e:
         logger.exception("Error processing change log")
         return JSONResponse(content={'error': str(e)}, status_code=500)
+# access_token = request.session.get("access_token")
 
 @router.get("/get-user-data")
 async def get_user_data(request: Request, firebase_user: dict = Depends(get_firebase_user)):
     user_id = firebase_user.get('userId')
+    # print("Xero session", request.session.get("xero"))
+    # print("QB Session", request.session.get("quickbooks"))
+    # print(request.session)
     if not user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID not found")
     try:

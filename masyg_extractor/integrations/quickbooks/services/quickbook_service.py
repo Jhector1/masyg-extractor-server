@@ -11,16 +11,18 @@ async def get_entities(request: Request, entity_type: str):
         entity_type (str): Either "Customer" or "Vendor".
 
     Returns:
-        A JSON response containing the list of entities, or raises an HTTPException with an error message.
+        A JSONResponse containing the list of entities, or raises an HTTPException with an error message.
     """
-    # Access session from the request (make sure to add SessionMiddleware in your app)
-    session = request.session
-    realm_id = session.get("realm_id")
-    access_token = session.get("access_token")
+    # Access QuickBooks authentication data from the dedicated "quickbooks" namespace.
+    qb_session = request.session.get("quickbooks", {})
+    realm_id = qb_session.get("realm_id")
+    access_token = qb_session.get("access_token")
 
     if not realm_id or not access_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="User not authenticated")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not authenticated"
+        )
 
     url = f"https://sandbox-quickbooks.api.intuit.com/v3/company/{realm_id}/query"
     headers = {
@@ -31,8 +33,10 @@ async def get_entities(request: Request, entity_type: str):
 
     try:
         response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()  # Raises HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()  # Raises HTTPError for 4xx/5xx responses
+
         data = response.json()
+        # Retrieve entities from the QueryResponse structure.
         entities = data.get("QueryResponse", {}).get(entity_type, [])
         return JSONResponse(content=entities, status_code=status.HTTP_200_OK)
 

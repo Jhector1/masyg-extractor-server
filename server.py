@@ -128,8 +128,10 @@ register_routers(app)
 import socketio
 @app.post("/client-id")
 async def get_client_id(request: Request):
+
     client_id = request.session.get("client_id")
     if not client_id:
+        print("ccc", client_id)
         client_id = str(uuid.uuid4())
         request.session["client_id"] = client_id
     return JSONResponse({"clientId": client_id})
