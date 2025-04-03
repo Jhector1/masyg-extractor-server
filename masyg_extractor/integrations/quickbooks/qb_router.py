@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime
 import asyncio
 import requests
@@ -326,7 +327,7 @@ async def get_accounts(request: Request, account_types: str = None):
     realm_id = qb_data.get("realm_id")
     access_token = qb_data.get("access_token")
 
-    url = f"https://sandbox-quickbooks.api.intuit.com/v3/company/{realm_id}/query"
+    url = f"{os.getenv("QB_URL")}/{realm_id}/query"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json"
