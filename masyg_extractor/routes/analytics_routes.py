@@ -1,5 +1,6 @@
 import json
 import asyncio
+import os
 from datetime import datetime
 from fastapi import APIRouter, Request, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -11,8 +12,16 @@ from masyg_extractor.services.dependencies import get_firebase_user
 router = APIRouter()
 
 # Create a global async Redis client (adjust host/port as needed)
-redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+redis_host = os.environ.get("REDISHOST", "localhost")
+redis_port = int(os.environ.get("REDISPORT", 6379))
+redis_password = os.environ.get("REDISPASSWORD", None)  # Optional, if your production Redis requires auth
 
+redis_client = redis.Redis(
+    host=redis_host,
+    port=redis_port,
+    password=redis_password,
+    decode_responses=True
+)
 
 @router.get("/dashboard/analytics")
 async def get_dashboard_analytics(firebase_user: dict = Depends(get_firebase_user)):
