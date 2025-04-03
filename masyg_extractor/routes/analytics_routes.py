@@ -12,16 +12,18 @@ from masyg_extractor.services.dependencies import get_firebase_user
 router = APIRouter()
 
 # Create a global async Redis client (adjust host/port as needed)
-redis_host = os.environ.get("REDISHOST", "localhost")
-redis_port = int(os.environ.get("REDISPORT", 6379))
-redis_password = os.environ.get("REDISPASSWORD", None)  # Optional, if your production Redis requires auth
-
-redis_client = redis.Redis(
-    host=redis_host,
-    port=redis_port,
-    password=redis_password,
-    decode_responses=True
-)
+# redis_host = os.environ.get("REDISHOST", "localhost")
+# redis_port = int(os.environ.get("REDISPORT", 6379))
+# redis_password = os.environ.get("REDISPASSWORD", None)  # Optional, if your production Redis requires auth
+#
+# redis_client = redis.Redis(
+#     host=redis_host,
+#     port=redis_port,
+#     password=redis_password,
+#     decode_responses=True
+# )# Use an environment variable for the Redis URL, defaulting to localhost if not set.
+redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+redis_client = redis.from_url(redis_url, decode_responses=True)
 
 @router.get("/dashboard/analytics")
 async def get_dashboard_analytics(firebase_user: dict = Depends(get_firebase_user)):
