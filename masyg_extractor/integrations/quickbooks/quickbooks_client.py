@@ -2,8 +2,10 @@ import httpx
 from fastapi import Request
 from typing import Optional, Dict, Any
 from masyg_extractor.services.my_log import logger
+import os
 
-QB_SANDBOX_URL = "https://sandbox-quickbooks.api.intuit.com/v3/company"
+QB_URL = os.getenv("QB_URL")
+
 
 
 async def quickbooks_request(
@@ -21,7 +23,7 @@ async def quickbooks_request(
 
     access_token = qb_data["access_token"]
     realm_id = qb_data["realm_id"]
-    url = f"{QB_SANDBOX_URL}/{realm_id}/{endpoint}?minorversion=75"
+    url = f"{QB_URL}/{realm_id}/{endpoint}?minorversion=75"
 
     headers = {
         "Authorization": f"Bearer {access_token}",

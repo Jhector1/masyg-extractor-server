@@ -6,6 +6,7 @@ import base64
 
 from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import JSONResponse
+from firebase_admin import firestore
 
 from masyg_extractor.integrations.quickbooks.services.quickbook_service import get_entities
 from masyg_extractor.integrations.quickbooks.services.receipt_service import ReceiptService
@@ -366,6 +367,57 @@ async def get_accounts(request: Request, account_types: str = None):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred: {str(err)}"
+        )
+
+@router.put("/save-config")
+async def save_config(request: Request):
+    """
+    Save or update integration configuration settings in Firestore.
+    Expects a JSON payload with:
+    {
+       "integration": "quickbooks" or "xero",
+       "config": { ... }  // integration-specific config data
+    }
+    The config is saved under: users/{user_id}/integrations/{integration}
+    """
+    firebase_user = request.session.get("user")
+    if not firebase_user or not firebase_user.get("userId"):
+        return JSONResponse({"error": "User not authenticated"}, status_code=401)
+    user_id = firebase_user.get("userId")
+
+    try:
+        body = await request.json()
+    except Exception as e:
+        return JSONResponse(
+            {"error": "Invalid JSON payload", "details": str(e)},
+            status_code=400
+        )
+
+    integration = body.get("integration")
+    config = body.get("config")
+    if integration not in ["quickbooks", "xero"]:
+        return JSONResponse(
+            {"error": "Invalid integration type. Expected 'quickbooks' or 'xero'."},
+            status_code=400
+        )
+    if not config:
+        return JSONResponse(
+            {"error": "Config object is required"},
+            status_code=400
+        )
+
+    try:
+        db = firestore.client()
+        # Save the config under the user's integrations collection, updating the document if it already exists.
+
+        doc_ref = db.collection("users").document(user_id)\
+                    .collection("integrations").document('QuickBooks')
+        doc_ref.set({"config": config}, merge=True)
+        return JSONResponse({"message": "Settings saved successfully"}, status_code=200)
+    except Exception as e:
+        return JSONResponse(
+            {"error": "Failed to save settings", "details": str(e)},
+            status_code=500
         )
 
 

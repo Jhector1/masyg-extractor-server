@@ -190,8 +190,10 @@ async def login(request: Request):
 
 @router.post("/logout")
 async def logout(request: Request):
-    request.session.pop('user', None)
+    # Clear the entire session
+    request.session.clear()
     return {"message": "Logout successful"}
+
 
 
 @router.get("/current")

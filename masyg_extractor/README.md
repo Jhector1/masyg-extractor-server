@@ -5,51 +5,89 @@
 
 users (collection)
  └── {user_id} (document)
-       ├── email: string                   // e.g., "jean@email.com"
-       ├── hasUsedTrial: boolean           // e.g., false
-       ├── isSubscribed: boolean           // e.g., false
-       ├── password: string                // e.g., "pbkdf2:sha256:..."
-       ├── username: string                // e.g., "Jean"
-       ├── createdAt: Timestamp            // when the user was created
-       └── updatedAt: Timestamp            // last update timestamp
+       ├── email: string
+       ├── hasUsedTrial: boolean
+       ├── isSubscribed: boolean
+       ├── password: string
+       ├── username: string
+       ├── createdAt: Timestamp
+       └── updatedAt: Timestamp
        
        ├── groups (subcollection)
        │      └── {group_id} (document)
-       │             ├── metadata: { ... }               // additional group-specific details
+       │             ├── metadata: { ... }
        │             └── files (subcollection)
-       │                      └── {file_name} (document) → { ... }  // each file's parsed data
+       │                      └── {file_name} (document) → { ... }
        │
        └── integrations (subcollection)
-              ├── QuickBooks (collection)
-              │      └── {group_id} (document)
-              │             ├── {transaction_id} (document)
-              │             │       ├── transactionType: string    // e.g., "Invoice"
-              │             │       ├── docNumber: string          // e.g., "INV-12345"
-              │             │       ├── customerId: string         // e.g., "12"
-              │             │       ├── date: Timestamp            // e.g., Timestamp corresponding to 2025-02-14
-              │             │       ├── amount: number             // e.g., 2415.0
-              │             │       └── metadata: {                // additional integration-specific data
-              │             │              ├── syncToken: string
-              │             │              └── otherField: string
-              │             └── {transaction_id} (document)
-              │                     ├── transactionType: string    
-              │                     ├── docNumber: string          
-              │                     ├── customerId: string         
-              │                     ├── date: Timestamp            
-              │                     ├── amount: number             
-              │                     └── metadata: { ... }
+              ├── quickbooks (document)
+              │      ├── config: { 
+              │      │         incomeAccount: string,
+              │      │         expenseAccount: string,
+              │      │         paymentTerms: string,  // e.g., "Net 30" or "Net 20" if custom
+              │      │         invoiceNumbering: string,
+              │      │         invoiceTemplate: string,
+              │      │         defaultTaxCode: string,
+              │      │         discountSettings: string,
+              │      │         autoInvoiceCreation: boolean,
+              │      │         autoSending: boolean,
+              │      │         paymentReminders: boolean,
+              │      │         syncFrequency: string,  // "Real-time", "Hourly", "Daily", etc.
+              │      │         errorHandling: string,
+              │      │         paymentMethods: string,
+              │      │         depositAccount: string,
+              │      │         customerGrouping: string,
+              │      │         salesReporting: string,
+              │      │         // Additional QuickBooks-specific settings can be added here.
+              │      │      }
+              │      └── transactions (subcollection)
+              │             └── {transaction_id} (document) → {
+              │                     groupId: string,            // (optional) reference to a group
+              │                     transactionType: string,    // e.g., "Invoice"
+              │                     docNumber: string,          // e.g., "INV-12345"
+              │                     customerId: string,         // e.g., "12"
+              │                     date: Timestamp,            // e.g., Timestamp for the transaction date
+              │                     amount: number,             // e.g., 2415.0
+              │                     metadata: {                 // additional integration-specific data
+              │                        syncToken: string,
+              │                        otherField: string,
+              │                        // any other transaction-specific details
+              │                     }
+              │             }
               │
-              ├── Xero (collection)
-              │      └── {group_id} (document)
-              │             └── {transaction_id} (document)
-              │                     ├── transactionType: string
-              │                     ├── docNumber: string
-              │                     ├── customerId: string
-              │                     ├── date: Timestamp
-              │                     ├── amount: number
-              │                     └── metadata: { ... }
+              ├── xero (document)
+              │      ├── config: { 
+              │      │         incomeAccount: string,
+              │      │         expenseAccount: string,
+              │      │         paymentTerms: string,
+              │      │         invoiceNumbering: string,
+              │      │         invoiceTemplate: string,
+              │      │         defaultTaxCode: string,
+              │      │         discountSettings: string,
+              │      │         autoInvoiceCreation: boolean,
+              │      │         autoSending: boolean,
+              │      │         paymentReminders: boolean,
+              │      │         syncFrequency: string,
+              │      │         errorHandling: string,
+              │      │         paymentMethods: string,
+              │      │         depositAccount: string,
+              │      │         customerGrouping: string,
+              │      │         salesReporting: string,
+              │      │         // Include any additional Xero-specific credentials (e.g., clientId, clientSecret, tenantId)
+              │      │      }
+              │      └── transactions (subcollection)
+              │             └── {transaction_id} (document) → {
+              │                     groupId: string,           
+              │                     transactionType: string,
+              │                     docNumber: string,
+              │                     customerId: string,
+              │                     date: Timestamp,
+              │                     amount: number,
+              │                     metadata: { ... }         // any extra fields required for Xero transactions
+              │             }
               │
               └── [Other integrations...]
+
 
 
 

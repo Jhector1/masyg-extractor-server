@@ -117,6 +117,8 @@ async def extract_data(
 
 
     # print(group_obj)
+    await sio.emit("data-progress", {"progress": 100}, room=client_id)
+
     return group_obj
 
 @router.post("/update-change-log")
@@ -169,35 +171,49 @@ async def update_change_log(request: Request, firebase_user: dict = Depends(get_
         logger.exception("Error processing change log")
         return JSONResponse(content={'error': str(e)}, status_code=500)
 # access_token = request.session.get("access_token")
-
 @router.get("/get-user-data")
 async def get_user_data(request: Request, firebase_user: dict = Depends(get_firebase_user)):
     user_id = firebase_user.get('userId')
-    # print("Xero session", request.session.get("xero"))
-    # print("QB Session", request.session.get("quickbooks"))
-    # print(request.session)
     if not user_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID not found")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User ID not found"
+        )
+
     try:
-        groups_ref = (await get_firestore_client()).collection("users").document(user_id).collection("groups")
-        groups_list = []
-        for group_doc in await asyncio.to_thread(lambda: list(groups_ref.stream())):
+        # Get the Firestore client and reference to the groups collection
+        firestore_client = await get_firestore_client()
+        groups_ref = firestore_client.collection("users").document(user_id).collection("groups")
+
+        # Fetch the list of group documents using a thread to avoid blocking the event loop
+        groups_docs = await asyncio.to_thread(lambda: list(groups_ref.stream()))
+
+        # Define an async helper to fetch each group's details concurrently.
+        async def fetch_group_data(group_doc):
             group_obj = {}
             group_data = group_doc.to_dict() or {}
             group_obj["group_id"] = group_doc.id
             group_obj["metadata"] = group_data.get("metadata", {})
+
+            # Retrieve file documents for this group concurrently via a thread.
             files_ref = group_doc.reference.collection("files")
-            for file_doc in await asyncio.to_thread(lambda: list(files_ref.stream())):
+            file_docs = await asyncio.to_thread(lambda: list(files_ref.stream()))
+            for file_doc in file_docs:
                 file_name = file_doc.id
                 file_data = file_doc.to_dict()
                 group_obj[file_name] = file_data
-            groups_list.append(group_obj)
+            return group_obj
 
+        # Use asyncio.gather to concurrently process all groups.
+        groups_list = await asyncio.gather(*(fetch_group_data(doc) for doc in groups_docs))
+
+        # Define a sort key based on the upload_time in metadata (if available).
         def sort_key(group):
             upload_time_str = group.get("metadata", {}).get("upload_time")
             if upload_time_str:
                 try:
                     dt = datetime.fromisoformat(upload_time_str)
+                    # Sort by the absolute difference from now (smaller difference means more recent)
                     return abs((datetime.now() - dt).total_seconds())
                 except Exception:
                     return float('inf')
@@ -209,7 +225,6 @@ async def get_user_data(request: Request, firebase_user: dict = Depends(get_fire
     except Exception as e:
         logger.exception("Failed to fetch user data")
         return JSONResponse(content={'error': 'Failed to fetch user data.'}, status_code=500)
-
 @router.delete("/delete-group/{group_id}")
 async def delete_group(group_id: str, request: Request, firebase_user: dict = Depends(get_firebase_user)):
     user_id = firebase_user.get('userId')

@@ -21,7 +21,7 @@ async def safe_emit_progress(client_id: str, progress_value: float, threshold: f
         """
     last_val = _last_emitted_overall.get(client_id, 0)
     # Ensure that the new value is at least as high as the last emitted one.
-    monotonic_progress = max(progress_value, last_val)
+    monotonic_progress = int(max(progress_value, last_val))
     if abs(monotonic_progress - last_val) >= threshold:
         await sio.emit("data-progress", {"progress": monotonic_progress}, room=client_id)
         _last_emitted_overall[client_id] = monotonic_progress

@@ -11,10 +11,10 @@ CLIENT_SECRET = os.getenv("QB_CLIENT_SECRET")
 SERVER_URL = os.getenv("SERVER_URL")
 CLIENT_URL = os.getenv("CLIENT_URL")
 REDIRECT_URI = f"{SERVER_URL}/integrations/quickbook/auth/callback"
-QB_AUTH_URL = "https://appcenter.intuit.com/connect/oauth2"
-QB_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
-QB_USERINFO_URL = "https://accounts.platform.intuit.com/v1/openid_connect/userinfo"
-SCOPES = "com.intuit.quickbooks.accounting openid profile email phone"
+QB_AUTH_URL = os.getenv("QB_AUTH_URL")
+QB_TOKEN_URL = os.getenv("QB_TOKEN_URL")
+QB_USERINFO_URL = os.getenv("QB_USERINFO_URL")
+SCOPES = os.getenv("QB_SCOPES")
 
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 fernet = Fernet(ENCRYPTION_KEY)

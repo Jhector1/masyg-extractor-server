@@ -1,3 +1,5 @@
+import os
+
 import requests
 from fastapi import Request, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -24,7 +26,7 @@ async def get_entities(request: Request, entity_type: str):
             detail="User not authenticated"
         )
 
-    url = f"https://sandbox-quickbooks.api.intuit.com/v3/company/{realm_id}/query"
+    url = f"{os.getenv("QB_URL")}/{realm_id}/query"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json"
