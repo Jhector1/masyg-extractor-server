@@ -131,9 +131,11 @@ import socketio
 async def get_client_id(request: Request):
 
     client_id = request.session.get("client_id")
+    print('dope client id',client_id)
     if not client_id:
 
         client_id = str(uuid.uuid4())
+        print('dope client id generate', client_id)
         request.session["client_id"] = client_id
     return JSONResponse({"clientId": client_id})
 

@@ -31,12 +31,12 @@ async def log_consumer():
             except Exception as e:
                 logger.warning(f"Failed to emit log message: {e}")
 
-async def send_log(message: str, user_room=None):
+async def send_log(message: str, log_key = "log_message",user_room=None):
     """Queues a log message for async emission."""
 
     # with queue_lock:
     #     log_queue.append((message, user_room))
-    await sio.emit('log_message', {'data': message}, namespace='/', room=user_room)
+    await sio.emit(log_key, {'data': message}, namespace='/', room=user_room)
 
     # Optional local log
     logger.info(f"Queued log: {message} (room={user_room})")

@@ -21,7 +21,7 @@ from pdf2image import convert_from_bytes
 import pytesseract
 import logging
 from masyg_extractor.services.my_log import logger, send_log
-from masyg_extractor.services.progress_log import safe_emit_progress, calculate_overall_progress, GPT_PROCESSING_WEIGHT
+from masyg_extractor.services.progress_log import ExtractorProgressLog
 from masyg_extractor.utils.extensions import sio
 
 # PyMuPDF
@@ -349,7 +349,7 @@ def extract_json_from_code_block(text):
         return None
 
 
-async def process_chunk(chunk_text, client_id, file_progress_share: float):
+async def process_chunk(chunk_text,progress_logger: ExtractorProgressLog, file_progress_share: float):
     """
     Use OpenAI's GPT model (gpt-3.5-turbo) to extract data from the text in JSON format.
     The progress for each chunk is updated in the shared progress_dict.
@@ -366,7 +366,7 @@ async def process_chunk(chunk_text, client_id, file_progress_share: float):
         local_progress = ((step + 1) / total_steps) * 100
         # Here, you could calculate a scaled progress: (local_progress/100)*file_progress_share
         overall_chunk_progress = (local_progress / 100) * file_progress_share
-        await safe_emit_progress(client_id, overall_chunk_progress)
+        await progress_logger.safe_emit_progress( overall_chunk_progress)
     # Once the simulated progress is complete, perform the actual GPT call.
 
     messages = [
@@ -445,7 +445,7 @@ async def process_chunk(chunk_text, client_id, file_progress_share: float):
 
 
 
-async def process_text_with_gpt(pdf_text: str, client_id: str, progress: Dict[str, float], files_count: int) -> Any:
+async def process_text_with_gpt(pdf_text: str, progress_logger: ExtractorProgressLog, progress: Dict[str, float], files_count: int) -> Any:
     """
     Process the entire text with GPT.
     We'll divide the GPT processing stage equally among chunks.
@@ -455,21 +455,21 @@ async def process_text_with_gpt(pdf_text: str, client_id: str, progress: Dict[st
     if len(pdf_text) <= 0:
         return None
     print(f"Processing chunk...")
-    gpt_stage_weight = GPT_PROCESSING_WEIGHT  # GPT stage contributes 50% to overall progress
+    gpt_stage_weight = ExtractorProgressLog.GPT_PROCESSING_WEIGHT  # GPT stage contributes 50% to overall progress
     if len(pdf_text) <= 1500:
         # Single chunk: full share for GPT stage from this file.
-        result = await process_chunk(pdf_text, client_id, gpt_stage_weight)
+        result = await process_chunk(pdf_text, progress_logger, gpt_stage_weight)
         progress["gpt_processing"] = gpt_stage_weight
-        await safe_emit_progress(client_id, calculate_overall_progress(progress))
+        await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(progress))
         return result
 
     # Multiple chunks
     chunks = [pdf_text[i:i+1500] for i in range(0, len(pdf_text), 1500)]
     chunk_share = gpt_stage_weight / len(chunks)
-    tasks = [process_chunk(chunk, client_id, chunk_share) for chunk in chunks]
+    tasks = [process_chunk(chunk, progress_logger, chunk_share) for chunk in chunks]
     results = await asyncio.gather(*tasks)
     progress["gpt_processing"] = gpt_stage_weight
-    await safe_emit_progress(client_id, calculate_overall_progress(progress))
+    await progress_logger.safe_emit_progress( progress_logger.calculate_overall_progress(progress))
     results = [r for r in results if r is not None]
     if not results:
         return None

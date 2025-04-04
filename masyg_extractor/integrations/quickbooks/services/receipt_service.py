@@ -46,7 +46,7 @@ class ReceiptService:
             )
             if dup.get("error"):
                 msg = f"{record_type.capitalize()} for ({get_original_filename(transaction_id)}) already recorded in QuickBooks."
-                await send_log(f"❌ {msg}", user_room=client_id)
+                await send_log(f"❌ {msg}", log_key="qb-log-message",user_room=client_id)
                 return dup
 
             # 2. Lookup or create customer

@@ -46,7 +46,7 @@ class InvoiceService:
             )
             if dup.get("error"):
                 msg = f"{record_type.capitalize()} for ({get_original_filename(transaction_id)}) already recorded in Xero."
-                await send_log(f"❌ {msg}", user_room=client_id)
+                await send_log(f"❌ {msg}",log_key="xero-log-message", user_room=client_id)
                 await asyncio.sleep(1)
                 return dup
 

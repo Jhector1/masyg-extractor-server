@@ -110,7 +110,7 @@ async def create_entity(
         id_field = entity + "ID"
         new_entity_id = entity_data_list[0].get(id_field)
         if new_entity_id:
-            await send_log(f"✅ {entity} created with ID: {new_entity_id}", user_room=client_id)
+
             logger.info(f"{entity} created with ID: {new_entity_id}")
             return new_entity_id
     raise Exception(f"Unexpected response structure: {response}")

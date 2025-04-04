@@ -86,7 +86,6 @@ async def process_single_record(
         return {"error": "Customer name is required.", record_key: item}
 
     if not date_str:
-        asyncio.create_task(send_log("❌ Date is required", user_room=client_id))
         return {"error": "Date is required.", record_key: item}
 
     try:
@@ -125,7 +124,7 @@ async def process_single_record(
         return response_data
     except Exception as e:
         error_msg = f"❌ Failed to process {record_key} for {get_original_filename(transaction_id)}"
-        asyncio.create_task(send_log(error_msg, user_room=client_id))
+        asyncio.create_task(send_log(error_msg,log_key="qb-log-message", user_room=client_id))
         return {
             "error": f"Failed to send {record_key}",
             "details": str(e),
@@ -159,7 +158,10 @@ async def send_invoice_route(request: Request):
     Handle sending invoices to QuickBooks.
     Normalizes the payload, validates required fields, and processes each invoice concurrently.
     """
-    client_id = request.cookies.get("clientId", "Guest")
+
+    client_id = request.session.get("client_id") or 'Guest'
+    _last_emitted_overall.pop(client_id, None)
+    # await send_log("⚙️ Processing invoices...", user_room=client_id)
     logger.info(f"Client ID: {client_id}")
     firebase_user = request.session.get("user")
     if not firebase_user or not firebase_user.get("userId"):
@@ -173,7 +175,7 @@ async def send_invoice_route(request: Request):
         logger.error(error_msg)
         return JSONResponse({"error": error_msg}, status_code=400)
 
-    asyncio.create_task(send_log("⚙️ Processing invoices...", user_room=client_id))
+    asyncio.create_task(send_log("⚙️ Processing invoices...",log_key="qb-log-message", user_room=client_id))
 
     try:
         normalized_records = await normalize_payload(data, record_key="invoice_data")

@@ -72,16 +72,18 @@ async def get_dashboard_analytics(firebase_user: dict = Depends(get_firebase_use
         # Get files for this group
         files_ref = group_doc.reference.collection("files")
         file_docs = list(await asyncio.to_thread(lambda: list(files_ref.stream())))
+        # print(file_docs)
         for file_doc in file_docs:
             total_files += 1
             file_data = file_doc.to_dict()
+            # print(file_data)
             # Determine if extraction was successful (no "error" field)
             if file_data.get("error"):
                 continue
             successful_files += 1
 
             # Sum up total spending per month if available
-            total_amount = file_data.get("total_amount")
+            total_amount = 0
             if total_amount is not None:
                 try:
                     amt = float(total_amount)
@@ -95,13 +97,15 @@ async def get_dashboard_analytics(firebase_user: dict = Depends(get_firebase_use
                 top_vendors[vendor] = top_vendors.get(vendor, 0) + 1
 
             # Aggregate spending by category
-            category = file_data.get("category")
-            if category and total_amount is not None:
-                try:
-                    amt = float(total_amount)
-                    category_breakdown[category] = category_breakdown.get(category, 0) + amt
-                except ValueError:
-                    pass
+            for line_item in file_data.get("line_items", []):
+                category = line_item.get("category", "").capitalize()
+                total_amount= line_item.get("unit_price")
+                if category and total_amount is not None:
+                    try:
+                        amt = float(total_amount)
+                        category_breakdown[category] = round(category_breakdown.get(category, 0) + amt, 2)
+                    except ValueError:
+                        pass
 
     extraction_accuracy = (successful_files / total_files * 100) if total_files > 0 else 0
 

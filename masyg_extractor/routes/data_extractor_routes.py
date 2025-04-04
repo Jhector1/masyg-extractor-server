@@ -21,8 +21,7 @@ from masyg_extractor.services.firestore_helpers import (
     document_delete,
     stream_collection,
 )
-from masyg_extractor.services.progress_log import safe_emit_progress, get_file_progress_dict, \
-    calculate_overall_progress, _last_emitted_overall
+from masyg_extractor.services.progress_log import ExtractorProgressLog, get_extractor_progress_logger
 from masyg_extractor.utils.extensions import sio
 from masyg_extractor.services.dependencies import get_firebase_user, generate_group_id
 from masyg_extractor.services.my_log import send_log, logger
@@ -34,12 +33,16 @@ async def extract_data(
     request: Request,
     files: List[UploadFile] = File(...),
     firebase_user: dict = Depends(get_firebase_user),
-        global_progress: Dict[str, float] = Depends(get_file_progress_dict)
+        global_progress: Dict[str, float] = Depends(ExtractorProgressLog.get_file_progress_dict),
+        progress_logger: ExtractorProgressLog = Depends(get_extractor_progress_logger)
 ):
 
+
     client_id = request.session.get("client_id") or 'Guest'
+    print("Client-ID: ",client_id)
+    # extractor_log = ExtractorProgressLog(client_id=client_id)
     print("client id",request.session.get("client_id"))
-    _last_emitted_overall.pop(client_id, None)
+    progress_logger.clear()
 
     user_id = firebase_user.get('userId')
     # await safe_emit_progress(client_id, calculate_overall_progress(global_progress))
@@ -63,7 +66,7 @@ async def extract_data(
     for filename, data in file_contents.items():
         logging.debug(f"File {filename} size: {len(data)} bytes")
 
-    results = await process_files_in_parallel(files, user_id, group_id, client_id, global_progress)
+    results = await process_files_in_parallel(files, user_id, group_id,progress_logger, global_progress)
     # print(results)
 
     # Compress and encode files.
@@ -90,6 +93,8 @@ async def extract_data(
             'content': encoded_content
         })
     if failed_file_quant >= len(files):
+        await sio.emit("data-progress", {"progress": 100}, room=client_id)
+
         return {'error': '❌Files Processing Failed'}
 
     group_doc_ref = firestore.client().collection("users").document(user_id) \

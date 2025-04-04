@@ -78,7 +78,7 @@ async def process_single_record(
     if not customer_name:
         return {"error": "Customer name is required.", record_key: item}
     if not date_str:
-        asyncio.create_task(send_log("❌ Date is required", user_room=client_id))
+
         return {"error": "Date is required.", record_key: item}
     if not group_id:
         return {"error": "Group ID is required.", record_key: item}
@@ -160,7 +160,7 @@ async def send_invoice_route(request: Request):
     asyncio.create_task(send_log("⚙️ Processing invoices...", user_room=client_id))
 
     try:
-        normalized_records = await normalize_payload(data, record_key="invoice_data")
+        normalized_records = await normalize_payload(data,log_key="xero-log-message", record_key="invoice_data")
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 

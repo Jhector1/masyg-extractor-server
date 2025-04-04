@@ -1,6 +1,9 @@
 import logging
 import asyncio
 
+from masyg_extractor.services.global_executor import MAIN_LOOP
+
+
 class AsyncSocketIOHandler(logging.Handler):
     def __init__(self, sio_instance):
         super().__init__()
@@ -13,7 +16,7 @@ class AsyncSocketIOHandler(logging.Handler):
                 self.sio.emit('log_message', {'data': log_entry}, namespace='/')
             )
         except RuntimeError:
-            from services.global_executor import MAIN_LOOP
+
             asyncio.run_coroutine_threadsafe(
                 self.sio.emit('log_message', {'data': log_entry}, namespace='/'),
                 MAIN_LOOP
