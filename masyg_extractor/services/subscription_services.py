@@ -21,7 +21,7 @@ def update_firestore_user(user_id: str, is_subscribed: bool, has_used_trial: boo
             request.session["user"]["hasUsedTrial"] = has_used_trial
     doc_ref = ref.document(user_id)
     doc_ref.update(update_data)
-    logger.info(f"Firestore user {user_id} updated: {update_data}")
+
 
 def handle_subscription_created(data: dict, firebase_user: dict, firebase_user_id: str, request: Request = None):
     """
@@ -36,7 +36,7 @@ def handle_subscription_created(data: dict, firebase_user: dict, firebase_user_i
 
     if status_ == "trialing" and trial_start and trial_end:
         if has_used_trial:
-            logger.info(f"User {firebase_user_id} has already used the free trial.")
+
             return {"error": "Free trial already used"}, 400
         else:
             logger.info(f"Free trial activated for user {firebase_user_id}.")

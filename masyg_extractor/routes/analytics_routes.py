@@ -64,7 +64,8 @@ async def get_dashboard_analytics(firebase_user: dict = Depends(get_firebase_use
             except Exception:
                 continue
             month_key = dt.strftime("%Y-%m")
-            monthly_uploads[month_key] = monthly_uploads.get(month_key, 0) + 1
+            for _ in metadata.get("files", []):
+                monthly_uploads[month_key] = monthly_uploads.get(month_key, 0) + 1
         else:
             month_key = "unknown"
 

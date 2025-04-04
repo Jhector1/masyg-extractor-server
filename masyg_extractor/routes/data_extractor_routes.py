@@ -38,7 +38,7 @@ async def extract_data(
 ):
 
     client_id = request.session.get("client_id") or 'Guest'
-    print(",,,,,,,,",request.session.get("client_id"))
+    print("client id",request.session.get("client_id"))
     _last_emitted_overall.pop(client_id, None)
 
     user_id = firebase_user.get('userId')
@@ -132,7 +132,7 @@ async def update_change_log(request: Request, firebase_user: dict = Depends(get_
         change_log = payload.get('change_log')
 
         if change_log is None or not isinstance(change_log, list):
-            print(change_log + """""nnfjfjfjfjf""")
+
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or missing change_log")
 
         client = await get_firestore_client()

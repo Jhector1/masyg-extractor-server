@@ -45,7 +45,7 @@ class ItemService:
                 )
                 items = response.get("QueryResponse", {}).get("Item", [])
                 if items:
-                    logger.info(f"Item found by id: {item_id_str}")
+
                     return True
             except Exception as e:
                 logger.error(f"Error checking item existence by id: {e} | Query: {query_by_id}")
@@ -63,13 +63,13 @@ class ItemService:
                 )
                 items = response.get("QueryResponse", {}).get("Item", [])
                 if items:
-                    logger.info(f"Item found by name: {item_name}")
+
                     return True
             except Exception as e:
                 logger.error(f"Error checking item existence by name: {e} | Query: {query_by_name}")
                 return False
 
-        logger.info(f"Item not found: {item_name} (ID: {item_id_str})")
+
         return False
 
     @staticmethod
@@ -81,17 +81,37 @@ class ItemService:
             if "QueryResponse" not in response or "Account" not in response["QueryResponse"]:
                 raise Exception("No accounts returned from QuickBooks")
             accounts = response["QueryResponse"]["Account"]
+
             income_account_id = None
             expense_account_id = None
+
+            # First pass: try to find accounts using your preferred criteria.
             for acc in accounts:
-                if acc.get("AccountType") == "Income" and acc.get("AccountSubType") in ["SalesOfProductIncome", "ServiceFeeIncome"]:
+                if acc.get("AccountType") == "Income" and acc.get("AccountSubType") in ["SalesOfProductIncome",
+                                                                                        "ServiceFeeIncome"]:
                     income_account_id = acc["Id"]
                 if acc.get("AccountType") == "Cost of Goods Sold":
                     expense_account_id = acc["Id"]
                 if income_account_id and expense_account_id:
                     break
+
+            # Second pass: if not found, fallback to Uncategorized accounts.
+            if not income_account_id:
+                for acc in accounts:
+                    if acc.get("AccountType") == "Income" and acc.get("AccountSubType") == "UncategorizedIncome":
+                        income_account_id = acc["Id"]
+                        break
+
+            if not expense_account_id:
+                for acc in accounts:
+                    if acc.get("AccountType") == "Cost of Goods Sold" and acc.get(
+                            "AccountSubType") == "UncategorizedExpense":
+                        expense_account_id = acc["Id"]
+                        break
+
             if not income_account_id or not expense_account_id:
                 raise Exception("Could not find suitable Income/Expense accounts in QuickBooks.")
+
             return income_account_id, expense_account_id
         except Exception as e:
             logger.error(f"Error fetching default service accounts: {e}")
@@ -162,14 +182,14 @@ class ItemService:
                 "name": "Sales of Product Income",
                 "value": "79"
             }
-            print(payload)
-        logger.info(f"Creating item with payload (sanitized): {{'Name': {payload.get('Name')}}}")
+
+
         try:
             response = await quickbooks_request(request, "item", payload=payload, method="POST", client_id=client_id)
             logger.info("create_item response received.")
             if "Item" in response and "Id" in response["Item"]:
                 item_id = response["Item"]["Id"]
-                logger.info(f"Item created with ID: {item_id}")
+
                 return item_id
             else:
                 logger.error(f"Failed to create item. Response: {response}")

@@ -49,9 +49,9 @@ async def quickbooks_request(
 
             response.raise_for_status()
             response_json = response.json()
-            logger.info(f"QuickBooks API Response: {response.status_code}")
+
             return response_json
         except httpx.RequestError as e:
             error_message = f"QuickBooks API Request Failed: {str(e)}"
-            logger.error(error_message)
+
             return {"error": error_message}

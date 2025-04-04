@@ -50,7 +50,7 @@ async def normalize_payload(data, record_key: str) -> list:
         records = data
     else:
         raise ValueError("Expected a list or object of records")
-    print(records)
+
     return records
 
 
@@ -188,7 +188,7 @@ async def send_invoice_route(request: Request):
         user_id=user_id,
         request=request
     )
-    print(responses)
+
     return JSONResponse(content=responses)
 
 
@@ -228,7 +228,7 @@ async def send_receipt_route(request: Request):
         user_id=user_id,
         request=request
     )
-    print(responses)
+
     return JSONResponse(content=responses)
 
 

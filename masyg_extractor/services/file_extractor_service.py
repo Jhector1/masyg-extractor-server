@@ -583,4 +583,4 @@ def remove_non_alphanumeric(text):
 if __name__ == "__main__":
     sample_text = "Hello, World! 123. @$%"
     cleaned_text = remove_non_alphanumeric(sample_text)
-    print(cleaned_text)  # Output: "Hello World 123"
+     # Output: "Hello World 123"

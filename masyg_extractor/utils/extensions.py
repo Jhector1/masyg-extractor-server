@@ -25,7 +25,7 @@ if ENV == "production":
         print(f"[ERROR] Redis connection failed: {e}")
 else:
     print("[INFO] Development environment detected. Redis is disabled.")
-print('origins allowed', ALLOWED_ORIGINS)
+
 # Create the Socket.IO AsyncServer instance
 sio = socketio.AsyncServer(
     async_mode="asgi",

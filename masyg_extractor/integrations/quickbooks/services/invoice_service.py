@@ -30,9 +30,9 @@ class InvoiceService:
         """
         Asynchronously creates an invoice in QuickBooks and stores key invoice info in Firestore.
         """
-        print("Type of invoice_exists_in_firestore:", type(invoice_exists_in_firestore))
+
         try:
-            print("0k0k0k0k0k")
+
             if not group_id or group_id.strip() == "":
                 return {"error": "Group ID is required for invoice creation."}
 
@@ -106,7 +106,7 @@ class InvoiceService:
                     }
                 })
 
-            print("0k0k0k0k0k")
+
             doc_number = generate_doc_number("INV")
             payload = {
                 "CustomerRef": {"value": valid_customer_id, "name": customer_name},

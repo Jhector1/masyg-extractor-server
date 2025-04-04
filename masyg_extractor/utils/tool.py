@@ -87,7 +87,7 @@ if __name__ == "__main__":
     ...
     """
     cleaned = clean_text(raw_text)
-    print(cleaned)
+
 import re
 
 

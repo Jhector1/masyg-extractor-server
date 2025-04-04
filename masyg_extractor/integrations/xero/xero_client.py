@@ -29,16 +29,16 @@ async def xero_request(
     }
 
     # Debug prints (optional)
-    print('xero_request started', endpoint)
+
 
     async with httpx.AsyncClient() as client:
         try:
             method = method.upper()
             if method == "GET":
                 params = payload if payload is not None else kwargs.pop("params", None)
-                print("GET params:", params)
+
                 response = await client.get(url, headers=headers, params=params, **kwargs)
-                print("GET response:", response)
+
             elif method == "POST":
                 response = await client.post(url, headers=headers, json=payload, **kwargs)
             elif method == "PUT":
@@ -51,10 +51,10 @@ async def xero_request(
             response.raise_for_status()
             response_json = response.json()
             logger.info(f"Xero API Response: {response.status_code}")
-            print("Response JSON:", response_json)
+
             return response_json
         except httpx.RequestError as e:
             error_message = f"Xero API Request Failed: {str(e)}"
-            print(error_message)
+
             logger.error(error_message)
             return {"error": error_message}
