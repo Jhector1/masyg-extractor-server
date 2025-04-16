@@ -1,29 +1,51 @@
+import asyncio
+
 import httpx
-from fastapi import Request
+from fastapi import Request, HTTPException, status
 from typing import Optional, Dict, Any
+
+from masyg_extractor.config.jwt_config import get_current_user_from_cookie
+from masyg_extractor.integrations.quickbooks.repository.firestore_repository import get_quickbooks_token
 from masyg_extractor.services.my_log import logger
 import os
 
-QB_URL = os.getenv("QB_URL")
+QUICKBOOKS_URL = os.getenv("QUICKBOOKS_URL")
 
 
 
 async def quickbooks_request(
         request: Request,
         endpoint: str,
+        user_id: str,
         payload: Optional[Dict[str, Any]] = None,
+
         method: str = "POST",
+
         client_id: str = "",
         **kwargs
 ) -> Dict[str, Any]:
+
     # Retrieve QuickBooks authentication data from a dedicated namespace.
-    qb_data = request.session.get("quickbooks")
+    # current_user = await asyncio.to_thread(get_current_user_from_cookie, request)
+    # print(current_user)
+
+
+    # user_id = current_user.get("userId")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not authenticated"
+        )
+
+    # Retrieve QuickBooks token data from Firestore
+    qb_data = await asyncio.to_thread(get_quickbooks_token, user_id, "quickbooks")
+
     if not qb_data or "access_token" not in qb_data or "realm_id" not in qb_data:
         raise Exception("User not authenticated")
 
     access_token = qb_data["access_token"]
     realm_id = qb_data["realm_id"]
-    url = f"{QB_URL}/{realm_id}/{endpoint}?minorversion=75"
+    url = f"{QUICKBOOKS_URL}/{realm_id}/{endpoint}?minorversion=75"
 
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -38,6 +60,7 @@ async def quickbooks_request(
             if method == "GET":
                 params = payload if payload is not None else kwargs.pop("params", None)
                 response = await client.get(url, headers=headers, params=params, **kwargs)
+
             elif method == "POST":
                 response = await client.post(url, headers=headers, json=payload, **kwargs)
             elif method == "PUT":

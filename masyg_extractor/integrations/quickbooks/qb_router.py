@@ -2,22 +2,27 @@ import json
 import os
 from datetime import datetime
 import asyncio
+from typing import Dict
+
 import requests
 import base64
 
-from fastapi import APIRouter, Request, HTTPException, status
+from fastapi import APIRouter, Request, HTTPException, status, Depends
 from fastapi.responses import JSONResponse
 from firebase_admin import firestore
 
+from masyg_extractor.config.jwt_config import get_current_user_from_cookie
+from masyg_extractor.integrations.quickbooks.repository.firestore_repository import get_quickbooks_token
 from masyg_extractor.integrations.quickbooks.services.quickbook_service import get_entities
 from masyg_extractor.integrations.quickbooks.services.receipt_service import ReceiptService
 from masyg_extractor.integrations.quickbooks.services.invoice_service import InvoiceService
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.services.my_log import send_log, logger
 from masyg_extractor.integrations.quickbooks.authentication.quickbook_auth import router as auth_router
+from masyg_extractor.services.progress_log import IntegrationsProgressLog, get_integrations_progress_logger
 from masyg_extractor.utils.tool import get_original_filename
 
-router = APIRouter(prefix="/integrations/quickbook")
+router = APIRouter(prefix="/integrations/quickbooks")
 router.include_router(auth_router, prefix="", tags=["QuickBooks Auth"])
 
 
@@ -63,6 +68,8 @@ async def process_single_record(
     request: Request,
     idx: int,
     total: int
+        ,progress_logger: IntegrationsProgressLog, progress: Dict[str, float],            share_progress: float,
+
 ) -> dict:
     """
     Process a single record:
@@ -71,9 +78,9 @@ async def process_single_record(
       - Invoke the provided send function (invoice or receipt)
       - Log outcomes and return the response or error
     """
-    progress = (100 / total) * (idx + 1)
+
     # await safe_emit("progress_update", {"progress": progress}, room=client_id)
-    await asyncio.sleep(0.0)
+    # await asyncio.sleep(0.0)
 
     customer_id = item.get("customer_id", "").strip()
     customer_name = item.get("customer_name", "").strip()
@@ -112,6 +119,9 @@ async def process_single_record(
             group_id=group_id,
             date=date_str,
             user_id=user_id,
+            progress_logger=progress_logger,
+            progress=progress,
+            share_progress=share_progress,
             client_id=client_id
         )
         if "error" not in response_data:
@@ -138,36 +148,43 @@ async def process_records(
     record_key: str,
     client_id: str,
     user_id: str,
-    request: Request
+    request: Request,
+progress_logger: IntegrationsProgressLog, progress: Dict[str, float],
 ) -> list:
     """
     Process all records concurrently using asyncio.gather.
     """
+    docs_stage_weight = IntegrationsProgressLog.CREATING_DOCUMENTS_WEIGHT  # GPT stage contributes 50% to overall progress
+
     total = len(records)
+    chunk_share = docs_stage_weight / total
     tasks = [
-        process_single_record(item, send_func, record_key, client_id, user_id, request, idx, total)
+        process_single_record(item, send_func, record_key, client_id, user_id, request, idx, total, progress_logger,progress, chunk_share)
         for idx, item in enumerate(records)
     ]
     responses = await asyncio.gather(*tasks, return_exceptions=True)
+    progress["creating_documents"] = docs_stage_weight
+    await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(progress))
+
     return responses
 
 
 @router.post("/send-invoice")
-async def send_invoice_route(request: Request):
+async def send_invoice_route(request: Request,global_progress: Dict[str, float] = Depends(IntegrationsProgressLog.get_file_progress_dict),
+        progress_logger: IntegrationsProgressLog = Depends(get_integrations_progress_logger), current_user: dict = Depends(get_current_user_from_cookie)):
     """
     Handle sending invoices to QuickBooks.
     Normalizes the payload, validates required fields, and processes each invoice concurrently.
     """
 
     client_id = request.session.get("client_id") or 'Guest'
-    _last_emitted_overall.pop(client_id, None)
+    # _last_emitted_overall.pop(client_id, None)
     # await send_log("⚙️ Processing invoices...", user_room=client_id)
     logger.info(f"Client ID: {client_id}")
-    firebase_user = request.session.get("user")
-    if not firebase_user or not firebase_user.get("userId"):
+    user_id = current_user.get("userId")
+    if not user_id:
         return JSONResponse({"error": "User not authenticated", "uploads": []}, status_code=401)
 
-    user_id = firebase_user.get("userId")
     try:
         data = await request.json()
     except Exception as e:
@@ -188,26 +205,30 @@ async def send_invoice_route(request: Request):
         record_key="invoice_data",
         client_id=client_id,
         user_id=user_id,
-        request=request
+        request=request,
+        progress_logger=progress_logger,
+        progress=global_progress,
+
     )
+    await send_log("⚙️ Processing invoices...", log_key="quickbooks-progress", user_room=client_id)
 
     return JSONResponse(content=responses)
 
 
 @router.post("/send-receipt")
-async def send_receipt_route(request: Request):
+async def send_receipt_route(request: Request,current_user: dict = Depends(get_current_user_from_cookie)):
     """
     Handle sending sales receipts to QuickBooks.
     Normalizes the payload, validates required fields, and processes each receipt concurrently.
     """
-    client_id = request.cookies.get("clientId", "Guest")
+    client_id = current_user.get("clientId", "Guest")
     logger.info(f"Client ID: {client_id}")
-    firebase_user = request.session.get("user")
-    if not firebase_user or not firebase_user.get("userId"):
+    user_id = request.session.get("user")
+    if not user_id:
         asyncio.create_task(send_log("User not authenticated", user_room=client_id))
         return JSONResponse({"error": "User not authenticated", "uploads": []}, status_code=401)
 
-    user_id = firebase_user.get("userId")
+
     try:
         data = await request.json()
     except Exception as e:
@@ -233,52 +254,30 @@ async def send_receipt_route(request: Request):
 
     return JSONResponse(content=responses)
 
-
-@router.get("/get-items")
-async def get_items(request: Request):
+@router.get("/get-items", status_code=status.HTTP_200_OK)
+async def get_items(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
     """
     Retrieves items from QuickBooks, returning only the Name and Id for each item.
     """
-    # Retrieve QuickBooks auth data from a dedicated namespace.
-    qb_data = request.session.get("quickbooks")
-    if not qb_data or "access_token" not in qb_data or "realm_id" not in qb_data:
-        return JSONResponse({"error": "User not authenticated"}, status_code=401)
-    access_token = qb_data.get("access_token")
-    realm_id = qb_data.get("realm_id")
-
-    from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
-    url_params = {"query": "SELECT * FROM Item"}
-    try:
-        response = await quickbooks_request(request, "query", method="GET", params=url_params)
-        if "Fault" in response:
-            error_info = response["Fault"].get("Error", [{}])[0]
-            error_message = error_info.get("Message", "Unknown error")
-            return JSONResponse({"error": error_message, "details": response}, status_code=401)
-
-        # Extract items from the QueryResponse.
-        items = response.get("QueryResponse", {}).get("Item", [])
-        # Filter each item to return only the Name and Id.
-        filtered_items = [
-            {"Name": item.get("Name"), "Id": item.get("Id")}
-            for item in items
-        ]
-        return JSONResponse(filtered_items, status_code=200)
-    except Exception as e:
-        logger.error(f"Error retrieving items: {str(e)}")
-        return JSONResponse(
-            {"error": "Exception while retrieving items", "details": str(e)},
-            status_code=500
-        )
+    user_Id = current_user.get("userId")
+    # Call get_entities helper with "Item" as the entity type.
+    response = await get_entities(request, "Item", user_Id)
+    items_entities = json.loads(response.body)
+    # Filter each item to return only the Name and Id.
+    filtered_items = [{"Name": item.get("Name"), "Id": item.get("Id")} for item in items_entities]
+    return JSONResponse(content=filtered_items, status_code=status.HTTP_200_OK)
 
 
 @router.get("/get-customers")
-async def get_customers(request: Request):
+async def get_customers(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
     """
     Fetches all customers from QuickBooks, returning only the DisplayName as Name and Id.
     """
     try:
+        user_Id = current_user.get("userId")
+
         # get_entities returns a JSONResponse containing a list of customer objects.
-        response = await get_entities(request, "Customer")
+        response = await get_entities(request, "Customer", user_Id)
         # Parse the JSONResponse body into a Python list.
         customer_entities = json.loads(response.body)
         # Filter out only the DisplayName as Name and Id.
@@ -293,17 +292,21 @@ async def get_customers(request: Request):
 
 
 @router.get("/get-vendors")
-async def get_vendors(request: Request):
+async def get_vendors(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
     """
     Fetches all vendors from QuickBooks.
     """
     try:
-        response = await get_entities(request, "Vendor")
+        user_Id = current_user.get("userId")
+
+        response = await get_entities(request, "Vendor", user_Id)
         customer_entities = json.loads(response.body)
+
         filtered_customers = [
             {"Name": customer.get("DisplayName"), "Id": customer.get("Id")}
             for customer in customer_entities
         ]
+
         return JSONResponse(content=filtered_customers, status_code=status.HTTP_200_OK)
     except Exception as e:
         logger.error(f"Error processing vendors: {str(e)}")
@@ -311,7 +314,7 @@ async def get_vendors(request: Request):
 
 
 @router.get("/get-accounts")
-async def get_accounts(request: Request, account_types: str = None):
+async def get_accounts(request: Request, current_user: dict = Depends(get_current_user_from_cookie),  account_types: str = None):
     """
     Fetches accounts from QuickBooks, returning only the Name and Id.
 
@@ -320,16 +323,19 @@ async def get_accounts(request: Request, account_types: str = None):
       For example: "Income,Cost of Goods Sold"
     If omitted, returns all accounts.
     """
-    qb_data = request.session.get("quickbooks")
-    if not qb_data or "access_token" not in qb_data or "realm_id" not in qb_data:
+    user_id = current_user.get("userId")
+
+    qb_data = get_quickbooks_token(user_id, "quickbooks")
+
+    if not qb_data or "accessToken" not in qb_data or "realmId" not in qb_data:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not authenticated"
         )
-    realm_id = qb_data.get("realm_id")
-    access_token = qb_data.get("access_token")
+    realm_id = qb_data.get("realmId")
+    access_token = qb_data.get("accessToken")
 
-    url = f"{os.getenv("QB_URL")}/{realm_id}/query"
+    url = f"{os.getenv("QUICKBOOKS_URL")}/{realm_id}/query"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json"
@@ -373,7 +379,7 @@ async def get_accounts(request: Request, account_types: str = None):
         )
 
 @router.put("/save-config")
-async def save_config(request: Request):
+async def save_config(request: Request,current_user: dict = Depends(get_current_user_from_cookie)):
     """
     Save or update integration configuration settings in Firestore.
     Expects a JSON payload with:
@@ -383,10 +389,9 @@ async def save_config(request: Request):
     }
     The config is saved under: users/{user_id}/integrations/{integration}
     """
-    firebase_user = request.session.get("user")
-    if not firebase_user or not firebase_user.get("userId"):
+    user_id = current_user.get("userId")
+    if not user_id:
         return JSONResponse({"error": "User not authenticated"}, status_code=401)
-    user_id = firebase_user.get("userId")
 
     try:
         body = await request.json()
@@ -414,7 +419,7 @@ async def save_config(request: Request):
         # Save the config under the user's integrations collection, updating the document if it already exists.
 
         doc_ref = db.collection("users").document(user_id)\
-                    .collection("integrations").document('QuickBooks')
+                    .collection("integrations").document('quickbooks')
         doc_ref.set({"config": config}, merge=True)
         return JSONResponse({"message": "Settings saved successfully"}, status_code=200)
     except Exception as e:
@@ -425,16 +430,16 @@ async def save_config(request: Request):
 
 
 @router.get("/get-income-accounts")
-async def get_income_accounts(request: Request):
+async def get_income_accounts(request: Request, current_user: dict = Depends(get_current_user_from_cookie),):
     """
     Fetches only Income Accounts from QuickBooks.
     """
-    return await get_accounts(request, account_types="Income")
+    return await get_accounts(request, current_user, account_types="Income")
 
 
 @router.get("/get-expense-accounts")
-async def get_expense_accounts(request: Request):
+async def get_expense_accounts(request: Request, current_user: dict = Depends(get_current_user_from_cookie),):
     """
     Fetches only Expense Accounts (e.g., Cost of Goods Sold) from QuickBooks.
     """
-    return await get_accounts(request, account_types="Cost of Goods Sold")
+    return await get_accounts(request, current_user, account_types="Cost of Goods Sold")

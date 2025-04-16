@@ -5,9 +5,11 @@ from fastapi import FastAPI, Depends, Request, HTTPException
 
 
 class ProgressLog:
-    def __init__(self, client_id: str):
+    def __init__(self, client_id: str, log_key= "data-progress"):
         self._last_emitted_overall: Dict[str, float] = {}
         self.client_id = client_id
+        self.log_key = log_key
+
 
     def calculate_overall_progress(self, progress: Dict[str, float]) -> float:
         """
@@ -28,7 +30,7 @@ class ProgressLog:
         self._last_emitted_overall.clear()
         logger.debug("Cleared last emitted progress values.")
 
-    async def safe_emit_progress(self, progress_value: float, log_key: str = "data-progress", threshold: float = 1.0):
+    async def safe_emit_progress(self, progress_value: float,  threshold: float = 1.0):
         """
         Emit a progress update that only increases (never goes backwards) and respects a threshold difference.
 
@@ -47,7 +49,7 @@ class ProgressLog:
 
         if abs(monotonic_progress - last_val) >= threshold:
             try:
-                await sio.emit(log_key, {"progress": monotonic_progress}, room=self.client_id)
+                await sio.emit(self.log_key, {"progress": monotonic_progress}, room=self.client_id)
                 self._last_emitted_overall[self.client_id] = monotonic_progress
                 logger.debug(
                     f"Emitted progress update for client {self.client_id}: {monotonic_progress} (threshold: {threshold})."
@@ -84,6 +86,7 @@ class ExtractorProgressLog(ProgressLog):
             "firestore_update": 0.0,
         }
 
+
 async def get_extractor_progress_logger(request: Request) -> ExtractorProgressLog:
     # Extract client ID from the session
     client_id = request.session.get("client_id", 'Guest')
@@ -92,3 +95,58 @@ async def get_extractor_progress_logger(request: Request) -> ExtractorProgressLo
         raise HTTPException(status_code=400, detail="Client ID not found in session.")
     # Return a new progress logger instance for this request
     return ExtractorProgressLog(client_id=client_id)
+
+
+
+
+class IntegrationsProgressLog(ProgressLog):
+    CREATING_ITEM_WEIGHT = 20.0
+    CREATING_CUSTOMER_WEIGHT = 30.0
+    CREATING_DOCUMENTS_WEIGHT = 50.0
+
+
+    @staticmethod
+    def get_file_progress_dict() -> Dict[str, float]:
+        """
+        Returns a dictionary representing the initial progress for each extraction stage.
+        Each stage starts at 0.0 progress.
+
+        :return: Dictionary with keys for each stage.
+        """
+        return {
+            "creating_item": 0.0,
+            "creating_customer": 0.0,
+            "creating_invoice": 0.0,
+
+        }
+    def getWeight(self, title):
+        if title.lower() == "creating_item":
+            return IntegrationsProgressLog.CREATING_ITEM_WEIGHT
+        elif title.lower() == "creating_customer":
+            return IntegrationsProgressLog.CREATING_CUSTOMER_WEIGHT
+        elif title.lower() == "creating_invoice":
+
+            return IntegrationsProgressLog.CREATING_DOCUMENTS_WEIGHT
+        else:
+            return 10
+async def get_integrations_progress_logger(request: Request, default_log_key ="quickbooks-progress") -> ExtractorProgressLog:
+    # Extract client ID from the session
+    client_id = request.session.get("client_id", 'Guest')
+    if not client_id:
+        logger.error("Client ID not found in session")
+        raise HTTPException(status_code=400, detail="Client ID not found in session.")
+    # Return a new progress logger instance for this request
+    return IntegrationsProgressLog(client_id=client_id, log_key=default_log_key)
+
+from fastapi import Request, Depends, HTTPException
+
+
+def get_integrations_progress_logger_factory(default_log_key: str = "quickbooks-invoice-progress"):
+    async def get_integrations_progress_logger(request: Request) -> ExtractorProgressLog:
+        client_id = request.session.get("client_id", 'Guest')
+        if not client_id:
+            logger.error("Client ID not found in session")
+            raise HTTPException(status_code=400, detail="Client ID not found in session.")
+        return IntegrationsProgressLog(client_id=client_id, log_key=default_log_key)
+
+    return get_integrations_progress_logger

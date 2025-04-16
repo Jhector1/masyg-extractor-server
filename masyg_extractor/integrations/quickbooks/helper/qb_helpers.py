@@ -3,26 +3,33 @@ from typing import Optional, Dict, Any
 from fastapi import Request
 from masyg_extractor.services.my_log import logger, send_log
 from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
+from masyg_extractor.services.progress_log import IntegrationsProgressLog
+
 
 async def check_entity_exists(
     request: Request,
     entity: str,
     identifier_field: str,
     identifier_value: str,
+    user_id: str,
     client_id: str = ""
 ) -> bool:
     """
     Asynchronously checks if an entity (Customer, Vendor, etc.) exists in QuickBooks using a given identifier field.
     """
     query = f"SELECT * FROM {entity} WHERE {identifier_field} = '{identifier_value}'"
+
     response = await quickbooks_request(
         request,
         "query",
+        user_id=user_id,
         method="GET",
         params={"query": query},
+
         client_id=client_id)
 
     exists = bool(response.get("QueryResponse", {}).get(entity))
+
     logger.info(f"{entity} exists check for {identifier_field}='{identifier_value}': {exists}")
     return exists
 
@@ -30,6 +37,7 @@ async def fetch_entity_id_by_name(
     request: Request,
     entity: str,
     name: str,
+    user_id: str,
     client_id: str = ""
 ) -> Optional[str]:
     """
@@ -40,6 +48,7 @@ async def fetch_entity_id_by_name(
         response = await quickbooks_request(
             request,
             "query",
+            user_id=user_id,
             method="GET",
             params={"query": query},
             client_id=client_id
@@ -57,6 +66,10 @@ async def create_entity(
     request: Request,
     entity: str,
     display_name: str,
+    user_id: str,
+
+        progress_logger: IntegrationsProgressLog,
+        progress: Dict[str, float],
     payload_extra: Optional[Dict[str, Any]] = None,
     client_id: str = ""
 ) -> str:
@@ -64,22 +77,35 @@ async def create_entity(
     Asynchronously creates a new entity in QuickBooks and returns its ID.
     Adds a default PrimaryEmailAddr based on the display name.
     """
+    steps = 5
+
+
+    for step in range(steps):
+        await asyncio.sleep(0.3)
+        progress[f"creating_customer"] = ((step + 1) / steps) * IntegrationsProgressLog.CREATING_CUSTOMER_WEIGHT
+        await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(progress))
+
     sanitized_name = display_name.lower().replace(' ', '_').replace("'", "")
     email_address = f"{sanitized_name}@example.com"
     payload = {
         "DisplayName": display_name,
         "PrimaryEmailAddr": {"Address": email_address}
     }
+
     if payload_extra:
         payload.update(payload_extra)
     response = await quickbooks_request(
         request,
         entity.lower(),
+        user_id=user_id,
         payload=payload,
         method="POST",
         client_id=client_id
     )
     logger.info(f"create_{entity.lower()} response received.")
+    progress[f"creating_customer"] = IntegrationsProgressLog.CREATING_CUSTOMER_WEIGHT
+    await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(progress))
+
     if not response or "Fault" in response:
         errors = response.get("Fault", {}).get("Error", [])
         error_msgs = "; ".join([err.get("Message", "Unknown error") for err in errors])

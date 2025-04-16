@@ -85,24 +85,42 @@ def find_firestore_user(stripe_customer_id: str):
 # ------------------------------------------------------------------------------
 # Stripe Helper (Async Wrapper)
 # ------------------------------------------------------------------------------
-
 async def delete_stripe_customer_data(customer_id: str):
     """
     Delete a Stripe customer asynchronously using run_in_threadpool.
+    If the customer does not exist, log a warning and skip deletion.
     """
     try:
+        # Step 1: Verify if the Stripe customer exists.
+        def blocking_check_customer():
+            try:
+                return stripe.Customer.retrieve(customer_id)
+            except stripe.error.InvalidRequestError as e:
+                # If the error message indicates the customer doesn't exist, return None.
+                if "No such customer" in str(e):
+                    return None
+                raise
+
+        customer = await run_in_threadpool(blocking_check_customer)
+        if customer is None:
+            # Log a warning and skip deletion if the customer doesn't exist.
+            logger.warning(f"Stripe customer {customer_id} does not exist. Skipping deletion.")
+            return {"status": "skipped", "message": f"Stripe customer {customer_id} not found, deletion skipped."}
+
+        # Step 2: Delete the customer if it exists.
         def blocking_delete():
-            # Retrieve and delete the customer.
-            stripe.Customer.retrieve(customer_id)
             return stripe.Customer.delete(customer_id)
+
         deleted_customer = await run_in_threadpool(blocking_delete)
         if not deleted_customer.get("deleted", False):
             raise HTTPException(status_code=500, detail="Failed to delete Stripe customer.")
+
         return {
             "status": "success",
             "message": f"Customer {customer_id} deleted and active subscriptions cancelled.",
-            "deleted": deleted_customer.get("deleted", False)
+            "deleted": True
         }
+
     except stripe.error.StripeError as e:
         logger.error(f"Stripe error when deleting customer {customer_id}: {e}")
         raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}")

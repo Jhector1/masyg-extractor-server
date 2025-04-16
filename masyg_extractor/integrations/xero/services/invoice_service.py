@@ -1,6 +1,8 @@
 import asyncio
 from typing import List, Dict, Any, Optional
 from fastapi import Request
+
+from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.services.my_log import logger, send_log
 from masyg_extractor.integrations.xero.xero_client import xero_request
 from masyg_extractor.integrations.xero.repository.firestore_repository import (
@@ -70,6 +72,7 @@ class InvoiceService:
                 item_id = item.get("item_id")
                 exists = await check_item_exists(
                     request=request,
+                    user_id=user_id,
                     item_name=item_name,
                     item_id=item_id,
                     client_id=client_id
@@ -78,6 +81,7 @@ class InvoiceService:
                     logger.info(f"Item '{item_name}' not found; creating new item.")
                     new_id = await create_item(
                         item,
+                        user_id=user_id,
                         client_id=client_id,
                         request=request
                     )
@@ -96,7 +100,7 @@ class InvoiceService:
                     "Description": item.get("description", "No description"),
                     "Quantity": quantity,
                     "UnitAmount": unit_price,
-                    "AccountCode": item.get("account_code", "200"),
+                    "AccountCode": item.get("account_code", "700"),
                     "TaxType": tax_type
                 })
 
@@ -105,25 +109,29 @@ class InvoiceService:
             payload = {
                 "Type": "ACCREC",
                 "Contact": {
-                    "ContactID": valid_customer_id,
-                    "Name": customer_name
+                    "ContactID": valid_customer_id
+                    # "Name": customer_name
                 },
-                "Date": date,
-                "DueDate": date,  # Optionally adjust to a calculated due date.
+                "Date": format_date(date),
+                "DueDate": format_date(date),  # Optionally adjust to a calculated due date.
                 "LineItems": line_items,
-                "InvoiceNumber": doc_number,
+                # "InvoiceNumber": doc_number,
                 "Status": "AUTHORISED",
                 "CurrencyCode": "USD"
             }
             logger.info(f"Invoice payload prepared for InvoiceNumber: {doc_number}")
+            # print(payload)
+            payload = {"Invoices": [payload]}
+
 
             logger.info("About to call xero_request")
             response = await xero_request(
-                request,
+
                 "Invoices",
+                user_id=user_id,
                 payload=payload,
                 method="POST",
-                client_id=client_id
+
             )
             logger.info(f"Response from Xero invoice creation: {response}")
 
@@ -140,7 +148,7 @@ class InvoiceService:
                     "transactionId": transaction_id,
                     "invoiceNumber": doc_number,
                     "customerId": valid_customer_id,
-                    "date": date,
+                    "date": format_date(date),
                     "amount": total_amount,
                     "metadata": {"syncToken": "0"}
                 }

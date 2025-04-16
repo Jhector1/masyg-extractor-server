@@ -10,6 +10,8 @@ async def check_entity_exists(
         entity: str,
         identifier_field: str,
         identifier_value: str,
+        user_id: str,
+
         client_id: str = ""
 ) -> bool:
     """
@@ -20,11 +22,12 @@ async def check_entity_exists(
     where_clause = f'{identifier_field}=="{identifier_value}"'
 
     response = await xero_request(
-        request,
+
         endpoint,
+        user_id=user_id,
         method="GET",
         params={"where": where_clause},
-        client_id=client_id
+
     )
     # Xero returns a list under the plural key.
     exists = bool(response.get(endpoint, []))
@@ -36,6 +39,8 @@ async def fetch_entity_id_by_name(
         request: Request,
         entity: str,
         name: str,
+        user_id: str,
+
         client_id: str = ""
 ) -> Optional[str]:
     """
@@ -46,11 +51,12 @@ async def fetch_entity_id_by_name(
     where_clause = f'Name=="{name}"'
     try:
         response = await xero_request(
-            request,
+
             endpoint,
+            user_id=user_id,
             method="GET",
             params={"where": where_clause},
-            client_id=client_id
+
         )
         results = response.get(endpoint, [])
         if results:
@@ -68,6 +74,8 @@ async def create_entity(
         request: Request,
         entity: str,
         display_name: str,
+        user_id: str,
+
         payload_extra: Optional[Dict[str, Any]] = None,
         client_id: str = ""
 ) -> str:
@@ -90,11 +98,12 @@ async def create_entity(
     payload = {endpoint: [base_payload]}
 
     response = await xero_request(
-        request,
+
         endpoint,
+        user_id=user_id,
         payload=payload,
         method="POST",
-        client_id=client_id
+
     )
     logger.info(f"create_{entity.lower()} response received.")
 

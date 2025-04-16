@@ -90,7 +90,7 @@ class BillService:
 
             if user_id:
                 bill_record = {
-                    "integration": "QuickBooks",
+                    "integration": "quickbooks",
                     "transactionType": "Bill",
                     "transactionId": transaction_id,
                     "docNumber": doc_number,

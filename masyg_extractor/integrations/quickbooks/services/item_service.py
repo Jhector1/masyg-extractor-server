@@ -1,9 +1,11 @@
+import asyncio
 from typing import Dict, Any, Optional
 from fastapi import Request
 
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.my_log import logger
 from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
+from masyg_extractor.services.progress_log import IntegrationsProgressLog
 
 
 class ItemService:
@@ -11,6 +13,7 @@ class ItemService:
     async def check_item_exists(
         request: Request,
         item_name: str,
+        user_id:str,
         item_id: Optional[str] = None,
         client_id: str = ""
     ) -> bool:
@@ -39,6 +42,7 @@ class ItemService:
                 response = await quickbooks_request(
                     request,
                     "query",
+                    user_id=user_id,
                     method="GET",
                     params={"query": query_by_id},
                     client_id=client_id
@@ -57,6 +61,7 @@ class ItemService:
                 response = await quickbooks_request(
                     request,
                     "query",
+                    user_id=user_id,
                     method="GET",
                     params={"query": query_by_name},
                     client_id=client_id
@@ -73,11 +78,11 @@ class ItemService:
         return False
 
     @staticmethod
-    async def get_default_service_accounts(request: Request, client_id: str = "") -> tuple[str, str]:
+    async def get_default_service_accounts(request: Request, user_id, client_id: str = "") -> tuple[str, str]:
         try:
             query = "SELECT * FROM Account WHERE Active = true"
             params = {"query": query}
-            response = await quickbooks_request(request, "query", method="GET", params=params, client_id=client_id)
+            response = await quickbooks_request(request, "query", user_id=user_id, method="GET", params=params, client_id=client_id)
             if "QueryResponse" not in response or "Account" not in response["QueryResponse"]:
                 raise Exception("No accounts returned from QuickBooks")
             accounts = response["QueryResponse"]["Account"]
@@ -118,9 +123,16 @@ class ItemService:
             raise
 
     @staticmethod
-    async def create_item(request: Request, item_data: Dict[str, Any], client_id: str = "") -> str:
+    async def create_item(request: Request, user_id: str, item_data: Dict[str, Any],progress_logger: IntegrationsProgressLog, progress: Dict[str, float], client_id: str = "") -> str:
         income_account_id = item_data.get("income_account_id")
         expense_account_id = item_data.get("expense_account_id")
+        steps = 5
+
+        for step in range(steps):
+            await asyncio.sleep(0.3)
+            progress["creating_item"] = ((step + 1) / steps) * IntegrationsProgressLog.CREATING_ITEM_WEIGHT
+            await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(progress))
+
         if not income_account_id or not expense_account_id:
             try:
                 default_income, default_expense = await ItemService.get_default_service_accounts(request, client_id=client_id)
@@ -183,9 +195,10 @@ class ItemService:
                 "value": "79"
             }
 
-
+        progress["creating_item"] = IntegrationsProgressLog.CREATING_ITEM_WEIGHT
+        await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(progress))
         try:
-            response = await quickbooks_request(request, "item", payload=payload, method="POST", client_id=client_id)
+            response = await quickbooks_request(request, "item", user_id=user_id, payload=payload, method="POST", client_id=client_id)
             logger.info("create_item response received.")
             if "Item" in response and "Id" in response["Item"]:
                 item_id = response["Item"]["Id"]
@@ -206,5 +219,5 @@ async def check_item_exists(item_name: str, item_id: Optional[str] = None, clien
     return await ItemService.check_item_exists(request, item_name, item_id, client_id=client_id)
 
 
-async def create_item(item_data: Dict[str, Any], client_id: str = "", request: Request = None) -> str:
-    return await ItemService.create_item(request, item_data, client_id=client_id)
+async def create_item(item_data: Dict[str, Any],progress_logger: IntegrationsProgressLog, progress: Dict[str, float], client_id: str = "", request: Request = None) -> str:
+    return await ItemService.create_item(request, item_data,progress_logger,progress, client_id=client_id)

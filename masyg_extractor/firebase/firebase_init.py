@@ -2,7 +2,7 @@ import firebase_admin
 from firebase_admin import credentials
 import os
 
-from masyg_extractor.config import FIREBASE_CONFIG
+from masyg_extractor.config.general_config import FIREBASE_CONFIG
 
 
 # def firebase_init():

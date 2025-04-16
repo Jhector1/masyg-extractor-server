@@ -11,8 +11,10 @@ class AccountService:
     async def check_account_exists(
         request: Request,
         account_name: str,
+            user_id:str,
         account_id: Optional[str] = None,
         client_id: str = ""
+
     ) -> bool:
         # Sanitize the account name
         account_name = remove_non_alphanumeric(account_name)
@@ -38,6 +40,7 @@ class AccountService:
                 response = await quickbooks_request(
                     request,
                     "query",
+                    user_id=user_id,
                     method="GET",
                     params={"query": query_by_id},
                     client_id=client_id
@@ -56,6 +59,7 @@ class AccountService:
                 response = await quickbooks_request(
                     request,
                     "query",
+                    user_id=user_id,
                     method="GET",
                     params={"query": query_by_name},
                     client_id=client_id
@@ -75,6 +79,7 @@ class AccountService:
     async def create_account(
         request: Request,
         account_data: Dict[str, Any],
+        user_id: str,
         client_id: str = ""
     ) -> str:
         # Sanitize and validate the account name.
@@ -96,6 +101,7 @@ class AccountService:
             response = await quickbooks_request(
                 request,
                 "account",
+                user_id=user_id,
                 payload=payload,
                 method="POST",
                 client_id=client_id
@@ -116,17 +122,20 @@ class AccountService:
 # Helper functions to directly call the service methods.
 async def check_account_exists(
     account_name: str,
+        user_id: str,
     account_id: Optional[str] = None,
+
     client_id: str = "",
     request: Request = None
 ) -> bool:
     account_name = remove_non_alphanumeric(account_name)
-    return await AccountService.check_account_exists(request, account_name, account_id, client_id=client_id)
+    return await AccountService.check_account_exists(request, account_name,  account_id, user_id=user_id, client_id=client_id)
 
 
 async def create_account(
     account_data: Dict[str, Any],
     client_id: str = "",
+        user_id: str = "",
     request: Request = None
 ) -> str:
-    return await AccountService.create_account(request, account_data, client_id=client_id)
+    return await AccountService.create_account(request, account_data,user_id=user_id, client_id=client_id)

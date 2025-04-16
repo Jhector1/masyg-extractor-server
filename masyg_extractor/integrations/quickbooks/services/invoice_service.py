@@ -10,6 +10,7 @@ from masyg_extractor.integrations.quickbooks.repository.firestore_repository imp
 from masyg_extractor.integrations.quickbooks.services.customer_service import get_or_create_customer
 from masyg_extractor.integrations.quickbooks.services.item_service import check_item_exists, create_item
 from masyg_extractor.integrations.transaction_helpers import generate_doc_number, check_duplicate_record
+from masyg_extractor.services.progress_log import IntegrationsProgressLog
 from masyg_extractor.utils.tool import get_original_filename
 
 
@@ -23,15 +24,25 @@ class InvoiceService:
             transaction_id: str,
             group_id: str,
             date: str,
-            user_id: str,
+            user_id: str
+            , progress_logger: IntegrationsProgressLog, progress: Dict[str, float],
+            share_progress: float,
             record_type: str = "invoices",
             client_id: str = ""
+
     ) -> Dict[str, Any]:
         """
         Asynchronously creates an invoice in QuickBooks and stores key invoice info in Firestore.
         """
 
         try:
+            steps = 5
+
+
+            for step in range(steps):
+                await asyncio.sleep(0.3)
+                progress["creating_documents"] = ((step + 1) / steps) * IntegrationsProgressLog.CREATING_ITEM_WEIGHT
+                await progress_logger.safe_emit_progress(share_progress)
 
             if not group_id or group_id.strip() == "":
                 return {"error": "Group ID is required for invoice creation."}
@@ -59,10 +70,12 @@ class InvoiceService:
                 customer_id,
                 customer_name,
                 user_id,
+                progress_logger,
+                progress,
                 client_id=client_id
             )
             # logger.info(f"Using customer ID: {valid_customer_id}")
-            # print("0k0k0k0k0k")
+
             if not items:
                 logger.info("No items provided for invoice.")
                 return {"error": "Items required for invoice creation."}
@@ -83,6 +96,7 @@ class InvoiceService:
                     logger.info(f"Item '{item_name}' not found; creating new item.")
                     new_id = await create_item(
                         item,
+                        progress_logger, progress,
                         client_id=client_id,
                         request=request
                     )
@@ -125,7 +139,7 @@ class InvoiceService:
             # Offload the synchronous HTTP request.
             response = await quickbooks_request(
                 request,
-                "invoice",
+                "invoice",user_id=user_id,
                 payload=payload,
                 method="POST",
                 client_id=client_id)
@@ -138,7 +152,7 @@ class InvoiceService:
 
             if user_id:
                 invoice_record = {
-                    "integration": "QuickBooks",
+                    "integration": "quickbooks",
                     "transactionType": "Invoice",
                     "transactionId": transaction_id,
                     "docNumber": doc_number,
@@ -160,5 +174,6 @@ class InvoiceService:
             return response
 
         except Exception as e:
-            logger.error(f"Exception in send_invoice: {str(e)}")
+            logger.error(f"Exception in send_invoice")
+
             return {"error": str(e)}

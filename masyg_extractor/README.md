@@ -39,7 +39,13 @@ users (collection)
               │      │         customerGrouping: string,
               │      │         salesReporting: string,
               │      │         // Additional QuickBooks-specific settings can be added here.
-              │      │      }
+              │      │      } , "tokenData": {
+                                        "accessToken": "your-access-token-here",
+                                        "refreshToken": "your-refresh-token-here",
+                                        "tokenType": "Bearer",
+                                        "expiresAt": "2025-12-31T23:59:59Z"
+                                      },
+
               │      └── transactions (subcollection)
               │             └── {transaction_id} (document) → {
               │                     groupId: string,            // (optional) reference to a group

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 import redis.asyncio as redis
 
+from masyg_extractor.config.jwt_config import get_current_user_from_cookie
 from masyg_extractor.services.firestore_helpers import get_firestore_client, document_get
 from masyg_extractor.services.dependencies import get_firebase_user
 
@@ -26,8 +27,8 @@ redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 redis_client = redis.from_url(redis_url, decode_responses=True)
 
 @router.get("/dashboard/analytics")
-async def get_dashboard_analytics(firebase_user: dict = Depends(get_firebase_user)):
-    user_id = firebase_user.get("userId")
+async def get_dashboard_analytics( current_user: dict = Depends(get_current_user_from_cookie),):
+    user_id = current_user.get("userId")
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="User ID not found"

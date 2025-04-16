@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional
+from typing import Optional, Dict
 from fastapi import Request
 from masyg_extractor.services.my_log import logger
 from masyg_extractor.integrations.quickbooks.repository.firestore_repository import (
@@ -11,6 +11,8 @@ from masyg_extractor.integrations.quickbooks.helper.qb_helpers import (
     fetch_entity_id_by_name,
     create_entity
 )
+from masyg_extractor.services.progress_log import IntegrationsProgressLog
+
 
 class CustomerService:
     @staticmethod
@@ -20,6 +22,7 @@ class CustomerService:
             customer_name: Optional[str] = None,
             client_id: str = ""
     ) -> bool:
+
         if customer_id:
             return await check_entity_exists(request, "Customer", "Id", customer_id, client_id=client_id)
         if customer_name:
@@ -29,10 +32,12 @@ class CustomerService:
     @staticmethod
     async def create_customer(
             request: Request,
-            customer_name: str,
-            client_id: str = ""
+            customer_name: str
+            , progress_logger: IntegrationsProgressLog, progress: Dict[str, float],
+            client_id: str = "",
+
     ) -> str:
-        return await create_entity(request, "Customer", customer_name, client_id=client_id)
+        return await create_entity(request, "Customer", customer_name, progress_logger, progress, client_id=client_id)
 
     @staticmethod
     async def fetch_customer_id_by_name(
@@ -47,7 +52,8 @@ async def get_or_create_customer(
         request: Request,
         customer_id: Optional[str],
         customer_name: str,
-        user_id: str,
+        user_id: str
+        , progress_logger: IntegrationsProgressLog, progress: Dict[str, float],
         client_id: str = ""
 ) -> str:
     if not customer_name or customer_name.strip() == "":
@@ -55,8 +61,10 @@ async def get_or_create_customer(
 
     # If no customer ID is provided, try to find an existing customer by name.
     if not customer_id:
+
         logger.info(f"Customer ID not provided; checking QuickBooks for {customer_name}")
         if await CustomerService.check_customer_exists(request, customer_name=customer_name, client_id=client_id):
+
             customer_id = await CustomerService.fetch_customer_id_by_name(request, customer_name, client_id=client_id)
             if customer_id:
                 logger.info(f"Found customer in QuickBooks: {customer_name} (ID: {customer_id})")
@@ -80,7 +88,8 @@ async def get_or_create_customer(
 
     # Otherwise, create a new customer.
     logger.info(f"Creating new customer for {customer_name}.")
-    new_customer_id = await CustomerService.create_customer(request, customer_name, client_id=client_id)
+    new_customer_id = await CustomerService.create_customer(request, customer_name, progress_logger, progress,
+                                                            client_id=client_id)
     await asyncio.to_thread(
         store_customer_record,
         user_id,
@@ -88,4 +97,5 @@ async def get_or_create_customer(
         {"Id": new_customer_id, "DisplayName": customer_name},
         client_id=client_id
     )
+
     return new_customer_id

@@ -8,6 +8,9 @@ Run with an ASGI server such as uvicorn:
 """
 
 import os
+
+from starlette.middleware.base import BaseHTTPMiddleware
+
 ENV = os.getenv("FLASK_ENV", "development").lower()
 import logging
 import uuid
@@ -46,7 +49,64 @@ from fastapi import FastAPI,Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+from starlette.responses import Response
 
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import FastAPI, Request
+from starlette.responses import Response
+
+class DefaultCookieMiddleware(BaseHTTPMiddleware):
+    def __init__(
+        self,
+        app: FastAPI,
+        default_domain: str,
+        default_samesite: str = "strict",
+        default_secure: bool = True,
+        default_httponly: bool = True,
+        default_max_age: int = None
+    ):
+        super().__init__(app)
+        self.default_domain = default_domain
+        self.default_samesite = default_samesite
+        self.default_secure = default_secure
+        self.default_httponly = default_httponly
+        self.default_max_age = default_max_age
+
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        cookies = response.headers.getlist("set-cookie")
+        if cookies:
+            new_cookies = []
+            for cookie in cookies:
+                # For example, you may want to treat "csrf_token" differently:
+                if "csrf_token=" in cookie:
+                    # If the cookie is for CSRF, maybe you don't want HttpOnly.
+                    desired_httponly = False
+                else:
+                    desired_httponly = self.default_httponly
+
+                # Append Domain if missing
+                if "Domain=" not in cookie:
+                    cookie += f"; Domain={self.default_domain}"
+                # Append SameSite if missing
+                if "SameSite=" not in cookie:
+                    cookie += f"; SameSite={self.default_samesite}"
+                # Append Secure if needed
+                if self.default_secure and "Secure" not in cookie:
+                    cookie += "; Secure"
+                # Append HttpOnly if needed
+                if desired_httponly and "HttpOnly" not in cookie:
+                    cookie += "; HttpOnly"
+                # Append Max-Age if specified and missing
+                if self.default_max_age is not None and "Max-Age=" not in cookie:
+                    cookie += f"; Max-Age={self.default_max_age}"
+                new_cookies.append(cookie)
+
+            response.headers.__delitem__("set-cookie")
+            for cookie in new_cookies:
+                response.headers.append("set-cookie", cookie)
+        return response
 # Create FastAPI app.
 app = FastAPI()
 secret_key = os.getenv('SECRET_KEY', 'BAD_SECRET_KEY')
@@ -61,6 +121,17 @@ if ENV == "production":
         same_site="none",
         https_only=True  # SESSION_COOKIE_SECURE=True
     )
+
+    app.add_middleware(
+        DefaultCookieMiddleware,
+        default_domain=".masyglink.com",
+        default_samesite="strict",
+        default_secure=True,
+        default_httponly=True,
+        default_max_age=1800  # e.g., 30 minutes
+    )
+
+    app.add_middleware(DefaultCookieMiddleware, default_domain=".masyglink.com", default_samesite="strict")
 
     # Add middleware to fix proxy headers (similar to ProxyFix in Flask)
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
@@ -127,17 +198,15 @@ register_routers(app)
 
 # Set up Socket.IO.
 import socketio
+
 @app.post("/client-id")
 async def get_client_id(request: Request):
-
     client_id = request.session.get("client_id")
-    print('dope client id',client_id)
     if not client_id:
-
         client_id = str(uuid.uuid4())
-        print('dope client id generate', client_id)
         request.session["client_id"] = client_id
     return JSONResponse({"clientId": client_id})
+
 
 # Create an async Socket.IO server with allowed CORS origins.
 # sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=origins)
@@ -155,7 +224,7 @@ async def connect(sid, environ, auth):
     client_id = query_params.get('clientId', ['Guest'])[0]
 
     await sio.enter_room(sid, client_id)
-    print(f"Client connected: {sid}, Client ID: {client_id}")
+
     await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, room=client_id)
 
     # Update the global event loop if needed.

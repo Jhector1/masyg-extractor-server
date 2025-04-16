@@ -18,6 +18,6 @@ with open(local_filename, "rb") as file:
         file.seek(0)  # Reset the file pointer
         image = Image.open(file)
         text = pytesseract.image_to_string(image)
-        print("Extracted text:", text)
+
     except Exception as e:
         print("Error opening or processing the image:", e)

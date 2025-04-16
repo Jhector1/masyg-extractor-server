@@ -5,7 +5,7 @@ from threading import Lock
 from masyg_extractor.utils.extensions import sio
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 
 if not logger.hasHandlers():
     handler = logging.StreamHandler()

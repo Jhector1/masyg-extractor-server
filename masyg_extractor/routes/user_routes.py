@@ -5,10 +5,11 @@ import string
 import time
 import asyncio
 import concurrent.futures
+from datetime import timedelta
 
-from fastapi import APIRouter, Request, HTTPException, status, Depends, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Request, status, BackgroundTasks, Depends,Response
 from fastapi_mail import MessageSchema
+from jose import jwt, JWTError
 from pydantic import BaseModel, EmailStr
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -17,6 +18,9 @@ import stripe
 
 from firebase_admin import auth as firebase_auth
 from firebase_admin import firestore
+
+from masyg_extractor.config.jwt_config import create_access_token, \
+    ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user_from_cookie, generate_csrf_token, SECRET_KEY, ALGORITHM
 from masyg_extractor.services.my_log import send_log, logger
 
 from masyg_extractor.services.data_extractor_services import get_firebase_user
@@ -87,7 +91,7 @@ async def verify_id_token_async(token, timeout_secs=10):
 # --- Async Route Handlers ---
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
-async def signup(request: Request):
+async def signup(request: Request,  background_tasks: BackgroundTasks):
     data = await request.json()
     if not data:
         raise HTTPException(status_code=400, detail="No data provided")
@@ -113,121 +117,193 @@ async def signup(request: Request):
         'email': email,
         'password': generate_password_hash(password, method='pbkdf2:sha256'),
         'isSubscribed': is_subscribed,
-        'hasUsedTrial': False
+        'hasUsedTrial': False,
+        'createdAt': datetime.utcnow().isoformat()  # or datetime.now().isoformat() for local time
     }
     user_added = await add_new_user_async(new_user, timeout_secs=10)
+
+
+
+    # Build a modern HTML email template with inline CSS
+    html_body = f"""
+   <!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Welcome to Masyg</title>
+</head>
+<body style="margin:0; padding:0; font-family:Arial, sans-serif; background-color:#f7f7f7;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f7f7f7;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff; padding:30px; 
+        border-radius:8px; margin-top:40px; box-shadow:0 2px 6px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="text-align:center; padding-bottom:20px;">
+              <h1 style="margin:0; color:#333;">🎉 Welcome to Masyg Link</h1>
+              <p style="margin:10px 0 0; color:#666;">Let’s Simplify Your Invoice & Receipt Workflow</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 0; color:#444; font-size:16px; line-height:1.6;">
+              <p>Hi <strong>{username}</strong>,</p>
+              <p>Thanks for signing up for <strong>Masyg</strong>, your new go-to tool for effortless 
+              receipt and invoice data extraction. We're excited to have you on board!</p>
+              <ul style="padding-left: 20px; color:#444;">
+                <li>📄 Extract key info from receipts and invoices in seconds</li>
+                <li>📄 Export to excel, csv format</li>
+                <li>🔄 Sync data with tools like QuickBooks and Xero</li>
+                <li>📊 Save time and reduce manual entry errors</li>
+              </ul>
+              <p>You're all set to start extracting like a pro. Simply upload your first file and let Masyg 
+              Link do the heavy lifting.</p>
+              <p style="text-align:center; margin:30px 0;">
+                <a href="{os.getenv('CLIENT_URL')}" style="display:inline-block; padding:12px 24px; 
+                background-color:#2c7be5; color:#ffffff; text-decoration:none; border-radius:5px;">👉 Get Started Now</a>
+              </p>
+              <p>If you have any questions or need help, just reply to this email — we're here for you.</p>
+              <p style="margin-top:30px;">Welcome again,</p>
+              <p><strong>— The Masyg Link Team</strong><br><a href="{os.getenv('CLIENT_URL')}" style="color:#2c7be5;">masyglink.com</a></p>
+            </td>
+          </tr>
+        </table>
+        <p style="font-size:12px; color:#999; margin-top:20px;">You’re receiving this email because you signed up for Masyg Link. If this wasn’t you, please ignore this message.</p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+
+    """
+
+    message = MessageSchema(
+        subject="🎉 Welcome to Masyg Link – Let’s Simplify Your Receipt Workflow",
+        recipients=[email],
+        body=html_body,
+        subtype="html"
+    )
+
+    # Schedule email sending in the background
+    background_tasks.add_task(request.app.state.mail.send_message, message)
+
+
+
+
     return {"message": "User created", "userId": user_added['userId']}
 
 
-@router.post("/login")
-async def login(request: Request):
-    data = await request.json()
-    clientId = request.session.get("client_id")
-    if clientId is None:
-        clientId = 'Guest'
-    # print('client------', clientId)
-    if not data:
-        raise HTTPException(status_code=400, detail="No data provided")
-
-    email = data.get('email', '').lower().strip()
-    password = data.get('password')
-    google_id_token = data.get('googleIdToken')
-
-    if not email and not google_id_token:
-        raise HTTPException(status_code=400, detail="Missing credentials")
-
-    try:
-        if google_id_token:
-            # Google login logic.
-            decoded_token = await verify_id_token_async(google_id_token, timeout_secs=10)
-            google_email = decoded_token.get('email')
-            username = decoded_token.get('name', 'Google User')
-
-            user_found = await query_user_by_email_async(google_email, timeout_secs=10)
-
-            if not user_found:
-                new_user = {
-                    'email': google_email,
-                    'username': username,
-                    'password': generate_password_hash(uuid.uuid4().hex, method='pbkdf2:sha256'),
-                    'isSubscribed': False,
-                    'hasUsedTrial': False,
-                }
-                user_found = await add_new_user_async(new_user, timeout_secs=10)
-
-        elif email and password:
-            user_found = await query_user_by_email_async(email, timeout_secs=10)
-            if not user_found or not check_password_hash(user_found.get('password'), password):
-                # Emit socket message for invalid login (assuming sio is integrated)
-                await sio.emit('log_message', {'data': '❌Invalid email or password!'}, room=clientId)
-                raise HTTPException(status_code=400, detail="Invalid email or password")
-        else:
-            raise HTTPException(status_code=400, detail="Invalid request")
-
-        # Assuming session is available via request.session from a session middleware.
-        request.session['user'] = {
-            'userId': user_found['userId'],
-            'username': user_found.get('username'),
-            'email': user_found.get('email'),
-            'isSubscribed': user_found.get('isSubscribed'),
-            'hasUsedTrial': user_found.get('hasUsedTrial')
-        }
-
-        await sio.emit('log_message', {'data': '✅Login successful!'}, room=clientId)
-        print("Client ID", clientId)
-        # await sio.emit("welcome", {"message": f"Welcome, {clientId}!"}, room=clientId)
-        asyncio.create_task(send_log( '✅Login successful!', user_room=clientId))
-        # logger.info(f"✅Login successful!", extra={"target_room": clientId})
-        # logger.info("Processing POST request", extra={"target_room": sid})
-
-        return {"message": "Login successful", "user": request.session['user']}
-
-    except Exception as e:
-        print(f"Error during login: {e}")
-        await sio.emit('log_message', {'data': '❌Error during login!'}, room=clientId)
-        raise HTTPException(status_code=500, detail="An error occurred during login")
+# @router.post("/login")
+# async def login(request: Request):
+#     data = await request.json()
+#     clientId = request.session.get("client_id")
+#     if clientId is None:
+#         clientId = 'Guest'
+#     # print('client------', clientId)
+#     if not data:
+#         raise HTTPException(status_code=400, detail="No data provided")
+#
+#     email = data.get('email', '').lower().strip()
+#     password = data.get('password')
+#     google_id_token = data.get('googleIdToken')
+#
+#     if not email and not google_id_token:
+#         raise HTTPException(status_code=400, detail="Missing credentials")
+#
+#     try:
+#         if google_id_token:
+#             # Google login logic.
+#             decoded_token = await verify_id_token_async(google_id_token, timeout_secs=10)
+#             google_email = decoded_token.get('email')
+#             username = decoded_token.get('name', 'Google User')
+#
+#             user_found = await query_user_by_email_async(google_email, timeout_secs=10)
+#
+#             if not user_found:
+#                 new_user = {
+#                     'email': google_email,
+#                     'username': username,
+#                     'password': generate_password_hash(uuid.uuid4().hex, method='pbkdf2:sha256'),
+#                     'isSubscribed': False,
+#                     'hasUsedTrial': False,
+#                 }
+#                 user_found = await add_new_user_async(new_user, timeout_secs=10)
+#
+#         elif email and password:
+#             user_found = await query_user_by_email_async(email, timeout_secs=10)
+#             if not user_found or not check_password_hash(user_found.get('password'), password):
+#                 # Emit socket message for invalid login (assuming sio is integrated)
+#                 await sio.emit('log_message', {'data': '❌Invalid email or password!'}, room=clientId)
+#                 raise HTTPException(status_code=400, detail="Invalid email or password")
+#         else:
+#             raise HTTPException(status_code=400, detail="Invalid request")
+#
+#         # Assuming session is available via request.session from a session middleware.
+#         request.session['user'] = {
+#             'userId': user_found['userId'],
+#             'username': user_found.get('username'),
+#             'email': user_found.get('email'),
+#             'isSubscribed': user_found.get('isSubscribed'),
+#             'hasUsedTrial': user_found.get('hasUsedTrial')
+#         }
+#
+#         await sio.emit('log_message', {'data': '✅Login successful!'}, room=clientId)
+#         print("Client ID", clientId)
+#         # await sio.emit("welcome", {"message": f"Welcome, {clientId}!"}, room=clientId)
+#         asyncio.create_task(send_log( '✅Login successful!', user_room=clientId))
+#         # logger.info(f"✅Login successful!", extra={"target_room": clientId})
+#         # logger.info("Processing POST request", extra={"target_room": sid})
+#
+#         return {"message": "Login successful", "user": request.session['user']}
+#
+#     except Exception as e:
+#         print(f"Error during login: {e}")
+#         await sio.emit('log_message', {'data': '❌Error during login!'}, room=clientId)
+#         raise HTTPException(status_code=500, detail="An error occurred during login")
 
 
 @router.post("/logout")
-async def logout(request: Request):
-    # Clear the entire session
+async def logout(request: Request, response: Response):
+    # Delete the JWT and CSRF token cookies so that subsequent requests are unauthenticated.
+    response.delete_cookie("access_token")
+    response.delete_cookie("csrf_token")
     request.session.clear()
+
     return {"message": "Logout successful"}
 
 
 
-@router.get("/current")
-async def get_current_user(request: Request):
-    current_user = request.session.get('user')
-    if not current_user:
-        raise HTTPException(status_code=401, detail="No user is currently logged in")
 
-    loop = asyncio.get_running_loop()
-    user_doc = await loop.run_in_executor(
-        executor,
-        lambda: ref.document(current_user['userId']).get()
-    )
-    if not user_doc.exists:
-        raise HTTPException(status_code=404, detail="User not found in database")
-
-    firebase_user_data = user_doc.to_dict()
-    request.session['user'] = {
-        'userId': current_user['userId'],
-        'username': firebase_user_data.get('username'),
-        'email': firebase_user_data.get('email'),
-        'isSubscribed': firebase_user_data.get('isSubscribed', False),
-        'hasUsedTrial': firebase_user_data.get('hasUsedTrial', False)
-    }
-    return {"user": request.session['user']}
-
+# @router.get("/current")
+# async def get_current_user(request: Request):
+#     current_user = request.session.get('user')
+#     if not current_user:
+#         raise HTTPException(status_code=401, detail="No user is currently logged in")
+#
+#     loop = asyncio.get_running_loop()
+#     user_doc = await loop.run_in_executor(
+#         executor,
+#         lambda: ref.document(current_user['userId']).get()
+#     )
+#     if not user_doc.exists:
+#         raise HTTPException(status_code=404, detail="User not found in database")
+#
+#     firebase_user_data = user_doc.to_dict()
+#     request.session['user'] = {
+#         'userId': current_user['userId'],
+#         'username': firebase_user_data.get('username'),
+#         'email': firebase_user_data.get('email'),
+#         'isSubscribed': firebase_user_data.get('isSubscribed', False),
+#         'hasUsedTrial': firebase_user_data.get('hasUsedTrial', False)
+#     }
+#     return {"user": request.session['user']}
+#
 
 @router.post("/update")
-async def update_user_info(request: Request):
-    firebase_user = request.session.get('user')
-    if not firebase_user:
-        raise HTTPException(status_code=401, detail="User not logged in")
+async def update_user_info(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
 
-    firebase_user_id = firebase_user.get('userId')
+    firebase_user_id = current_user.get('userId')
+    if not firebase_user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
     loop = asyncio.get_running_loop()
     doc = await loop.run_in_executor(
         executor,
@@ -241,7 +317,7 @@ async def update_user_info(request: Request):
     if not updated_data:
         raise HTTPException(status_code=400, detail="No update data provided")
 
-    old_email = firebase_user.get('email', '').lower().strip()
+    old_email = current_user.get('email', '').lower().strip()
     new_email = updated_data.get('email', '').lower().strip()
     username = updated_data.get('username')
     old_password = updated_data.get('old_password')
@@ -400,13 +476,13 @@ async def reset_password(request: Request):
 
 
 @router.post("/create-customer-portal")
-async def create_customer_portal(request: Request):
+async def create_customer_portal(request: Request,  current_user: dict = Depends(get_current_user_from_cookie)):
     try:
         if 'user' not in request.session:
             raise HTTPException(status_code=401, detail="User not logged in")
 
-        firebase_user = request.session['user']
-        firebase_user_id = firebase_user.get('userId')
+        # firebase_user = request.session['user']
+        firebase_user_id = current_user.get('userId')
         loop = asyncio.get_running_loop()
         doc = await loop.run_in_executor(
             executor,
@@ -430,7 +506,7 @@ async def create_customer_portal(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-from fastapi import APIRouter, Request, HTTPException, status, Depends
+from fastapi import Request, HTTPException, status, Depends
 from fastapi.responses import JSONResponse
 
 # Assuming these are your helper functions:
@@ -443,26 +519,26 @@ from fastapi.responses import JSONResponse
 
 @router.delete("/delete-my-account/{email}")
 async def delete_my_account(
-        email: str,
-        request: Request,
-        firebase_user: dict = Depends(get_firebase_user)
+    email: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user_from_cookie)
 ):
     # Validate that the authenticated user has a valid user ID.
-    user_id = firebase_user.get('userId')
+    user_id = current_user.get('userId')
     if not user_id:
         logger.error("Authenticated user does not have a userId")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID not found")
 
     # Validate that the authenticated user's email is available.
-    session_email = firebase_user.get("email")
+    session_email = current_user.get("email")
     if not session_email:
         logger.error("Authenticated user does not have an email")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not found")
 
-    # Check that the session email matches the provided email.
+    # Check that the authenticated email matches the provided email.
     if session_email.lower() != email.lower():
         logger.error(
-            f"Email mismatch: session email '{session_email}' does not match provided email '{email}'"
+            f"Email mismatch: authenticated email '{session_email}' does not match provided email '{email}'"
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized: Email mismatch")
 
@@ -490,7 +566,7 @@ async def delete_my_account(
     # If the user account exists, proceed with deletion.
     if user_snapshot.exists:
         try:
-            # If there is a Stripe customer ID, delete the associated Stripe customer data.
+            # If there is a Stripe customer ID, try to delete the associated Stripe customer data.
             if stripe_customer_id:
                 await delete_stripe_customer_data(stripe_customer_id)
             # Delete the user document from Firestore.
@@ -508,3 +584,151 @@ async def delete_my_account(
         status_code=200
     )
 
+
+
+
+
+
+
+
+
+
+
+@router.post("/login")
+async def login(request: Request, response: Response):
+    data = await request.json()
+    email = data.get("email", "").lower().strip()
+    password = data.get("password")
+    google_id_token = data.get("googleIdToken")
+
+    if not email and not google_id_token:
+        raise HTTPException(status_code=400, detail="Missing credentials")
+
+    try:
+        if google_id_token:
+            # Google login flow
+            decoded_token = await verify_id_token_async(google_id_token, timeout_secs=10)
+            google_email = decoded_token.get("email")
+            username = decoded_token.get("name", "Google User")
+            user_found = await query_user_by_email_async(google_email, timeout_secs=10)
+            if not user_found:
+                new_user = {
+                    "email": google_email,
+                    "username": username,
+                    "password": generate_password_hash(uuid.uuid4().hex, method="pbkdf2:sha256"),
+                    "isSubscribed": False,
+                    "hasUsedTrial": False,
+                }
+                user_found = await add_new_user_async(new_user, timeout_secs=10)
+        elif email and password:
+            user_found = await query_user_by_email_async(email, timeout_secs=10)
+            if not user_found or not check_password_hash(user_found.get("password"), password):
+                raise HTTPException(status_code=400, detail="Invalid email or password")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid request")
+
+        # Prepare user data for JWT and response
+        user_data = {
+            "userId": user_found["userId"],
+            "username": user_found.get("username"),
+            "email": user_found.get("email"),
+            "isSubscribed": user_found.get("isSubscribed"),
+            "hasUsedTrial": user_found.get("hasUsedTrial")
+        }
+
+        access_token = create_access_token(
+            data={
+                "sub": user_data["userId"],
+                "username": user_data.get("username"),
+                "email": user_data.get("email"),
+                "isSubscribed": user_data.get("isSubscribed"),
+
+            },
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
+
+        # Set the JWT in an HttpOnly cookie.
+        # The middleware will automatically add Domain, SameSite, Secure, HttpOnly, and Max-Age.
+        response.set_cookie(key="access_token", value=access_token)
+
+        # Set a CSRF token in a separate cookie (accessible to JavaScript)
+        csrf_token = generate_csrf_token()
+        response.set_cookie(key="csrf_token", value=csrf_token)
+
+        return {"message": "Login successful", "user": user_data}
+
+    except Exception as e:
+        print(f"Error during login: {e}")
+        raise HTTPException(status_code=500, detail=f"An error occurred during login: {str(e)}")
+
+
+# Refactored protected endpoint using the JWT dependency.
+@router.get("/current")
+async def get_current_user(
+        current_user: dict = Depends(get_current_user_from_cookie)
+):
+    """
+    Retrieves the current user’s data from Firestore by using the userId from the JWT stored in an HttpOnly cookie.
+    It also updates the user info with data from Firestore.
+    """
+    # Offload the blocking Firestore call to a separate thread
+    user_doc = await asyncio.to_thread(ref.document(current_user["userId"]).get)
+
+    if not user_doc.exists:
+        raise HTTPException(status_code=404, detail="User not found in database")
+
+    firebase_user_data = user_doc.to_dict()
+
+    # Refresh user data from Firestore
+    current_user.update({
+        "username": firebase_user_data.get("username"),
+        "email": firebase_user_data.get("email"),
+        "isSubscribed": firebase_user_data.get("isSubscribed", False),
+        "hasUsedTrial": firebase_user_data.get("hasUsedTrial", False)
+    })
+
+    return {"user": current_user}
+
+# Note: With JWT-based authentication, logout is usually handled on the client side
+# by simply deleting the stored token. To enforce logout on the server, consider implementing a token blacklist.
+
+
+
+@router.post("/refresh-token")
+async def refresh_token(request: Request):
+    # Read the refresh token from the HttpOnly cookie
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token missing"
+        )
+    try:
+        # Decode the refresh token to extract the user identifier
+        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token"
+            )
+        # Generate a new access token using the user identifier
+        new_access_token = create_access_token(
+            {"sub": user_id},
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
+        # Generate a new CSRF token
+        new_csrf_token = generate_csrf_token()
+
+        # Create a response that sets the new access token and CSRF token in cookies
+        response = JSONResponse(content={"message": "Token refreshed"})
+        response.set_cookie(key="access_token", value=new_access_token, httponly=True)
+        # The CSRF token is set as non-HttpOnly so it can be read by JavaScript
+        response.set_cookie(key="csrf_token", value=new_csrf_token, httponly=False)
+        return response
+
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )

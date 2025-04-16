@@ -1,9 +1,11 @@
 import os
 import time
 import stripe
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
 from firebase_admin import firestore
+
+from masyg_extractor.config.jwt_config import get_current_user_from_cookie
 from masyg_extractor.services.subscription_services import *  # Ensure these functions are updated to use Firestore as well
 
 # Initialize Firestore client and reference to the "users" collection.
@@ -49,16 +51,16 @@ async def get_checkout_session(sessionId: str):
         raise HTTPException(status_code=400, detail="Error retrieving session")
 
 @router.post("/create-checkout-session")
-async def create_checkout_session(request: Request):
+async def create_checkout_session(request : Request, current_user: dict = Depends(get_current_user_from_cookie)):
     """
     Create a new Checkout Session for the logged-in user's subscription.
     Apply a free trial only if the user has not already used one.
     """
-    firebase_user = request.session.get("user")
-    if not firebase_user:
+    firebase_user_id = current_user.get("userId")
+    if not firebase_user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
 
-    firebase_user_id = firebase_user.get("userId")
+
     doc_ref = ref.document(firebase_user_id)
     doc = doc_ref.get()
     if not doc.exists:
@@ -122,7 +124,7 @@ async def create_checkout_session(request: Request):
         raise HTTPException(status_code=500, detail="Failed to create checkout session")
 
 @router.post("/customer-portal")
-async def customer_portal(request: Request):
+async def customer_portal(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
     """
     Redirect the customer to the Stripe customer portal for subscription management.
     """
@@ -177,15 +179,14 @@ async def webhook_received(request: Request):
     return JSONResponse({"status": "success"})
 
 @router.post("/unsubscribe")
-async def unsubscribe(request: Request):
+async def unsubscribe(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
     """
     Unsubscribe the user by canceling their active subscription in Stripe
     and updating their subscription status in Firestore.
     """
-    firebase_user = request.session.get("user")
-    if not firebase_user:
+    firebase_user_id = current_user.get("userId")
+    if not firebase_user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    firebase_user_id = firebase_user.get("userId")
     doc_ref = ref.document(firebase_user_id)
     doc = doc_ref.get()
     if not doc.exists:
@@ -211,47 +212,46 @@ async def unsubscribe(request: Request):
         logger.error(f"Error unsubscribing user: {e}")
         raise HTTPException(status_code=400, detail="Failed to unsubscribe")
 
-@router.get("/payment-method")
-async def get_payment_methods(request: Request):
-    """
-    Retrieve all payment methods for the logged-in user.
-    """
-    firebase_user = request.session.get("user")
-    if not firebase_user:
-        raise HTTPException(status_code=401, detail="User not logged in")
-    firebase_user_id = firebase_user.get("userId")
-    doc_ref = ref.document(firebase_user_id)
-    doc = doc_ref.get()
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="User not found in Firestore")
-    user_data = doc.to_dict()
-    stripe_customer_id = user_data.get("stripeCustomerId")
-    if not stripe_customer_id:
-        raise HTTPException(status_code=400, detail="No Stripe customer ID associated with user")
-
-    try:
-        def blocking_list_payment_methods():
-            return stripe.PaymentMethod.list(customer=stripe_customer_id, type="card")
-        payment_methods = await run_in_threadpool(blocking_list_payment_methods)
-        cards = []
-        for method in payment_methods.data:
-            cards.append({
-                "id": method.id,
-                "brand": method.card.brand,
-                "last4": method.card.last4,
-                "exp_month": method.card.exp_month,
-                "exp_year": method.card.exp_year,
-            })
-        if cards:
-            return JSONResponse({"paymentMethods": cards})
-        else:
-            return JSONResponse({"message": "No payment methods found"}, status_code=404)
-    except stripe.error.StripeError as e:
-        logger.error(f"Stripe API error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve payment methods")
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
+# @router.get("/payment-method")
+# async def get_payment_methods(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
+#     """
+#     Retrieve all payment methods for the logged-in user.
+#     """
+#     firebase_user_id = current_user.get("userId")
+#     if not firebase_user_id:
+#         raise HTTPException(status_code=401, detail="User not logged in")
+#     doc_ref = ref.document(firebase_user_id)
+#     doc = doc_ref.get()
+#     if not doc.exists:
+#         raise HTTPException(status_code=404, detail="User not found in Firestore")
+#     user_data = doc.to_dict()
+#     stripe_customer_id = user_data.get("stripeCustomerId")
+#     if not stripe_customer_id:
+#         raise HTTPException(status_code=400, detail="No Stripe customer ID associated with user")
+#
+#     try:
+#         def blocking_list_payment_methods():
+#             return stripe.PaymentMethod.list(customer=stripe_customer_id, type="card")
+#         payment_methods = await run_in_threadpool(blocking_list_payment_methods)
+#         cards = []
+#         for method in payment_methods.data:
+#             cards.append({
+#                 "id": method.id,
+#                 "brand": method.card.brand,
+#                 "last4": method.card.last4,
+#                 "exp_month": method.card.exp_month,
+#                 "exp_year": method.card.exp_year,
+#             })
+#         if cards:
+#             return JSONResponse({"paymentMethods": cards})
+#         else:
+#             return JSONResponse({"message": "No payment methods found"}, status_code=404)
+#     except stripe.error.StripeError as e:
+#         logger.error(f"Stripe API error: {e}")
+#         raise HTTPException(status_code=500, detail="Failed to retrieve payment methods")
+#     except Exception as e:
+#         logger.error(f"Unexpected error: {e}")
+#         raise HTTPException(status_code=500, detail="An unexpected error occurred")
 
 @router.post("/payment-method/delete")
 async def delete_payment_method(request: Request):

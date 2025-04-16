@@ -1,24 +1,34 @@
+import asyncio
+
 import httpx
 from fastapi import Request
 from typing import Optional, Dict, Any
+
+from masyg_extractor.integrations.quickbooks.repository.firestore_repository import get_quickbooks_token
 from masyg_extractor.services.my_log import logger
+from fastapi import Request, HTTPException, status
 
 XERO_BASE_URL = "https://api.xero.com/api.xro/2.0"
 
 
 async def xero_request(
-        request: Request,
         endpoint: str,
+        user_id: str,
         payload: Optional[Dict[str, Any]] = None,
         method: str = "POST",
         **kwargs
 ) -> Dict[str, Any]:
     # Ensure the user is authenticated with Xero using namespaced session data.
-    xero_data = request.session.get("xero")
-    if not xero_data or "access_token" not in xero_data or "tenant_id" not in xero_data:
-        raise Exception("User not authenticated")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not authenticated"
+        )
+    xero_data = await asyncio.to_thread(get_quickbooks_token, user_id, "xero")
+    if not xero_data or "accessToken" not in xero_data or "tenant_id" not in xero_data:
+        raise Exception("Access Token or Tenant ID not found")
 
-    access_token = xero_data["access_token"]
+    access_token = xero_data["accessToken"]
     tenant_id = xero_data["tenant_id"]
     url = f"{XERO_BASE_URL}/{endpoint}"
 

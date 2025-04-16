@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request, UploadFile, File, Depends, status
 
 from firebase_admin import firestore, firestore as admin_fs
 
+from masyg_extractor.config.jwt_config import get_current_user_from_cookie
 from masyg_extractor.services.change_log_services import handle_document_edit, handle_document_delete, \
     handle_document_add, LINE_ITEM_REGEX, handle_line_item_update, handle_group_delete
 from masyg_extractor.services.processing import process_files_in_parallel
@@ -32,19 +33,19 @@ router = APIRouter(prefix="/extractor")
 async def extract_data(
     request: Request,
     files: List[UploadFile] = File(...),
-    firebase_user: dict = Depends(get_firebase_user),
+    current_user: dict = Depends(get_current_user_from_cookie),
         global_progress: Dict[str, float] = Depends(ExtractorProgressLog.get_file_progress_dict),
         progress_logger: ExtractorProgressLog = Depends(get_extractor_progress_logger)
 ):
 
 
     client_id = request.session.get("client_id") or 'Guest'
-    print("Client-ID: ",client_id)
+
     # extractor_log = ExtractorProgressLog(client_id=client_id)
-    print("client id",request.session.get("client_id"))
+
     progress_logger.clear()
 
-    user_id = firebase_user.get('userId')
+    user_id = current_user.get('userId')
     # await safe_emit_progress(client_id, calculate_overall_progress(global_progress))
 
     # print(user_id)
@@ -61,7 +62,7 @@ async def extract_data(
 
     failed_file_quant =0
 
-    # Read file bytes once and log file sizes.
+    # Read file bytes onÏce and log file sizes.
     file_contents = {file.filename: await file.read() for file in files}
     for filename, data in file_contents.items():
         logging.debug(f"File {filename} size: {len(data)} bytes")
@@ -127,8 +128,8 @@ async def extract_data(
     return group_obj
 
 @router.post("/update-change-log")
-async def update_change_log(request: Request, firebase_user: dict = Depends(get_firebase_user)):
-    user_id = firebase_user.get('userId')
+async def update_change_log(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
+    user_id = current_user.get('userId')
     if not user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID not found")
     # print("************nfhfhhf*******")
@@ -177,8 +178,8 @@ async def update_change_log(request: Request, firebase_user: dict = Depends(get_
         return JSONResponse(content={'error': str(e)}, status_code=500)
 # access_token = request.session.get("access_token")
 @router.get("/get-user-data")
-async def get_user_data(request: Request, firebase_user: dict = Depends(get_firebase_user)):
-    user_id = firebase_user.get('userId')
+async def get_user_data(request: Request,current_user: dict = Depends(get_current_user_from_cookie)):
+    user_id = current_user.get('userId')
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -231,8 +232,8 @@ async def get_user_data(request: Request, firebase_user: dict = Depends(get_fire
         logger.exception("Failed to fetch user data")
         return JSONResponse(content={'error': 'Failed to fetch user data.'}, status_code=500)
 @router.delete("/delete-group/{group_id}")
-async def delete_group(group_id: str, request: Request, firebase_user: dict = Depends(get_firebase_user)):
-    user_id = firebase_user.get('userId')
+async def delete_group(group_id: str, request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
+    user_id = current_user.get('userId')
     if not user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID not found")
     try:
@@ -249,11 +250,11 @@ async def delete_group(group_id: str, request: Request, firebase_user: dict = De
 
 @router.delete("/delete/groups/{group_id}/files/{file_name}/records/{record_key}")
 async def delete_record(
-    group_id: str, file_name: str, record_key: str, request: Request, firebase_user: dict = Depends(get_firebase_user)
+    group_id: str, file_name: str, record_key: str, request: Request,current_user: dict = Depends(get_current_user_from_cookie)
 ):
     if not group_id or not file_name or not record_key:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required parameters")
-    user_id = firebase_user.get('userId')
+    user_id = current_user.get('userId')
     if not user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID not found")
     sanitized_file_name = file_name
@@ -281,9 +282,9 @@ async def delete_record(
 
 @router.put("/update/groups/{group_id}/files/{file_name}/records/{record_key}")
 async def update_record(
-    group_id: str, file_name: str, record_key: str, request: Request, firebase_user: dict = Depends(get_firebase_user)
+    group_id: str, file_name: str, record_key: str, request: Request, current_user: dict = Depends(get_current_user_from_cookie)
 ):
-    user_id = firebase_user.get('userId')
+    user_id = current_user.get('userId')
     if not user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID not found")
     try:
@@ -311,10 +312,10 @@ from fastapi.responses import JSONResponse
 async def update_group_name(
     group_id: str,
     request: Request,
-    firebase_user: dict = Depends(get_firebase_user)
+        current_user: dict = Depends(get_current_user_from_cookie)
 ):
     # Get the user ID from the firebase user payload.
-    user_id = firebase_user.get("userId")
+    user_id = current_user.get("userId")
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -365,14 +366,14 @@ async def update_group_name(
 async def delete_all_data(
         email: str,
         request: Request,
-        firebase_user: dict = Depends(get_firebase_user)
+        current_user: dict = Depends(get_current_user_from_cookie)
 ):
     # Validate authenticated user details
-    user_id = firebase_user.get('userId')
+    user_id = current_user.get('userId')
     if not user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID not found")
 
-    session_email = firebase_user.get("email")
+    session_email = current_user.get("email")
     if not session_email:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not found")
 
@@ -407,13 +408,13 @@ async def delete_all_data(
 @router.patch("/update_view", status_code=200)
 async def update_view_status(
         request: Request,
-        firebase_user: dict = Depends(get_firebase_user)
+        current_user: dict = Depends(get_current_user_from_cookie)
 ):
     """
     Updates the view status of a group by setting its metadata.isViewed field to True.
     Expects a JSON payload with a "groupId" key.
     """
-    user_id = firebase_user.get("userId")
+    user_id = current_user.get("userId")
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
