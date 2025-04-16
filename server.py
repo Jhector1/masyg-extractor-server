@@ -137,7 +137,7 @@ if ENV == "production":
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
     # Force HTTPS redirection.
-    # app.add_middleware(HTTPSRedirectMiddleware)
+    app.add_middleware(HTTPSRedirectMiddleware)
 
     # Optionally set cookie domain based on SERVER_URL.
     server_url = os.getenv('SERVER_URL')
