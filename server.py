@@ -131,7 +131,7 @@ if ENV == "production":
         default_max_age=1800  # e.g., 30 minutes
     )
 
-    app.add_middleware(DefaultCookieMiddleware, default_domain=".masyglink.com", default_samesite="strict")
+    # app.add_middleware(DefaultCookieMiddleware, default_domain=".masyglink.com", default_samesite="strict")
 
     # Add middleware to fix proxy headers (similar to ProxyFix in Flask)
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
