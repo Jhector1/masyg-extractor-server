@@ -118,14 +118,14 @@ if ENV == "production":
     app.add_middleware(
         SessionMiddleware,
         secret_key=secret_key,
-        same_site="none",
+        same_site="lax",
         https_only=True  # SESSION_COOKIE_SECURE=True
     )
 
     app.add_middleware(
         DefaultCookieMiddleware,
         default_domain=".masyglink.com",
-        default_samesite="none",
+        default_samesite="lax",
         default_secure=True,
         default_httponly=True,
         default_max_age=1800  # e.g., 30 minutes
