@@ -126,7 +126,7 @@ if ENV == "production":
         DefaultCookieMiddleware,
         default_domain=".masyglink.com",
         default_samesite="none",
-        default_secure=True,
+        default_secure=True, # dme
         default_httponly=True,
         default_max_age=1800  # e.g., 30 minutes
     )
@@ -137,7 +137,7 @@ if ENV == "production":
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
     # Force HTTPS redirection.
-    app.add_middleware(HTTPSRedirectMiddleware)
+    # app.add_middleware(HTTPSRedirectMiddleware)
 
     # Optionally set cookie domain based on SERVER_URL.
     server_url = os.getenv('SERVER_URL')
