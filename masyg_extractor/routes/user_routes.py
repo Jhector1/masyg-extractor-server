@@ -523,8 +523,10 @@ async def delete_my_account(
     request: Request,
     current_user: dict = Depends(get_current_user_from_cookie)
 ):
+    print('current_user', current_user)
     # Validate that the authenticated user has a valid user ID.
     user_id = current_user.get('userId')
+    # print(user_id, "user_id")
     if not user_id:
         logger.error("Authenticated user does not have a userId")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID not found")
@@ -593,7 +595,7 @@ async def delete_my_account(
 
 
 
-
+users_coll = firestore_db.collection("users")
 @router.post("/login")
 async def login(request: Request, response: Response):
     data = await request.json()
@@ -604,131 +606,153 @@ async def login(request: Request, response: Response):
     if not email and not google_id_token:
         raise HTTPException(status_code=400, detail="Missing credentials")
 
-    try:
-        if google_id_token:
-            # Google login flow
-            decoded_token = await verify_id_token_async(google_id_token, timeout_secs=10)
-            google_email = decoded_token.get("email")
-            username = decoded_token.get("name", "Google User")
-            user_found = await query_user_by_email_async(google_email, timeout_secs=10)
-            if not user_found:
-                new_user = {
-                    "email": google_email,
-                    "username": username,
-                    "password": generate_password_hash(uuid.uuid4().hex, method="pbkdf2:sha256"),
-                    "isSubscribed": False,
-                    "hasUsedTrial": False,
-                }
-                user_found = await add_new_user_async(new_user, timeout_secs=10)
-        elif email and password:
-            user_found = await query_user_by_email_async(email, timeout_secs=10)
-            if not user_found or not check_password_hash(user_found.get("password"), password):
-                raise HTTPException(status_code=400, detail="Invalid email or password")
-        else:
-            raise HTTPException(status_code=400, detail="Invalid request")
+    # 1) Fetch or create the top‐level user record
+    if google_id_token:
+        decoded = await verify_id_token_async(google_id_token, timeout_secs=10)
+        email, username = decoded["email"], decoded.get("name", "Google User")
+        user = await query_user_by_email_async(email, timeout_secs=10)
+        if not user:
+            user = await add_new_user_async({
+                "email": email,
+                "username": username,
+                "password": generate_password_hash(uuid.uuid4().hex, method="pbkdf2:sha256"),
+                "isSubscribed": False,
+            }, timeout_secs=10)
+    else:
+        user = await query_user_by_email_async(email, timeout_secs=10)
+        if not user or not check_password_hash(user["password"], password):
+            raise HTTPException(status_code=400, detail="Invalid email or password")
 
-        # Prepare user data for JWT and response
-        user_data = {
-            "userId": user_found["userId"],
-            "username": user_found.get("username"),
-            "email": user_found.get("email"),
-            "isSubscribed": user_found.get("isSubscribed"),
-            "hasUsedTrial": user_found.get("hasUsedTrial")
-        }
+    user_id = user["userId"]
 
-        access_token = create_access_token(
-            data={
-                "sub": user_data["userId"],
-                "username": user_data.get("username"),
-                "email": user_data.get("email"),
-                "isSubscribed": user_data.get("isSubscribed"),
+    # 2) Load the trial doc from /users/{uid}/plan/trial
+    trial_ref = users_coll.document(user_id).collection("plan").document("trial")
+    trial_snap = await asyncio.to_thread(trial_ref.get)
 
-            },
-            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        )
+    has_used_trial = False
+    trial_date = None
+    if trial_snap.exists:
+        tdata = trial_snap.to_dict()
+        has_used_trial = bool(tdata.get("hasUsed", False))
+        trial_date = tdata.get("date")  # this will be a Firestore Timestamp
 
-        # Set the JWT in an HttpOnly cookie.
-        # The middleware will automatically add Domain, SameSite, Secure, HttpOnly, and Max-Age.
-        response.set_cookie(key="access_token", value=access_token)
+    # 3) Build payload and issue JWT
+    user_payload = {
+        "userId":    user_id,
+        "username":  user.get("username"),
+        "email":     user.get("email"),
+        "isSubscribed": user.get("isSubscribed", False),
+        "hasUsedTrial": has_used_trial,
+        "trialDate": trial_date.isoformat() if trial_date else None
+    }
+    # print(user_payload, 'gttgg')
 
-        # Set a CSRF token in a separate cookie (accessible to JavaScript)
-        csrf_token = generate_csrf_token()
-        response.set_cookie(key="csrf_token", value=csrf_token)
+    access_token = create_access_token(
+        data={
+            "sub": user_id,
+            "username": user_payload.get("username"),
+            "email": user_payload.get("email"),
+            # you can embed trial status in the token if desired
+            "isSubscribed": user_payload["isSubscribed"],
+            "hasUsedTrial": user_payload["hasUsedTrial"],
+        },
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
 
-        return {"message": "Login successful", "user": user_data}
+    response.set_cookie("access_token", access_token)
+    response.set_cookie("csrf_token", generate_csrf_token())
 
-    except Exception as e:
-        print(f"Error during login: {e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred during login: {str(e)}")
+    return {"message": "Login successful", "user": user_payload}
 
 
-# Refactored protected endpoint using the JWT dependency.
 @router.get("/current")
 async def get_current_user(
-        current_user: dict = Depends(get_current_user_from_cookie)
+    current_user: dict = Depends(get_current_user_from_cookie)
 ):
-    """
-    Retrieves the current user’s data from Firestore by using the userId from the JWT stored in an HttpOnly cookie.
-    It also updates the user info with data from Firestore.
-    """
-    # Offload the blocking Firestore call to a separate thread
-    user_doc = await asyncio.to_thread(ref.document(current_user["userId"]).get)
+    uid = current_user.get("userId")
+    if not uid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
+    # 1) Refresh top‐level fields
+    user_doc = await asyncio.to_thread(users_coll.document(uid).get)
     if not user_doc.exists:
-        raise HTTPException(status_code=404, detail="User not found in database")
+        raise HTTPException(status_code=404, detail="User not found")
 
-    firebase_user_data = user_doc.to_dict()
-
-    # Refresh user data from Firestore
+    data = user_doc.to_dict()
     current_user.update({
-        "username": firebase_user_data.get("username"),
-        "email": firebase_user_data.get("email"),
-        "isSubscribed": firebase_user_data.get("isSubscribed", False),
-        "hasUsedTrial": firebase_user_data.get("hasUsedTrial", False)
+        "username": data.get("username"),
+        "email":    data.get("email"),
+        "isSubscribed": data.get("isSubscribed", False),
     })
 
+    # 2) Refresh trial status from subcollection
+    trial_ref = users_coll.document(uid).collection("plan").document("trial")
+    trial_snap = await asyncio.to_thread(trial_ref.get)
+
+    current_user["hasUsedTrial"] = False
+    current_user["trialDate"]    = None
+    if trial_snap.exists:
+        tdata = trial_snap.to_dict()
+        current_user["hasUsedTrial"] = bool(tdata.get("hasUsed", False))
+        current_user["trialDate"]    = tdata.get("date")
+
     return {"user": current_user}
-
-# Note: With JWT-based authentication, logout is usually handled on the client side
-# by simply deleting the stored token. To enforce logout on the server, consider implementing a token blacklist.
-
 
 
 @router.post("/refresh-token")
 async def refresh_token(request: Request):
-    # Read the refresh token from the HttpOnly cookie
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token missing"
         )
+
     try:
-        # Decode the refresh token to extract the user identifier
         payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
         if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token"
-            )
-        # Generate a new access token using the user identifier
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+        # 🔁 Fetch user info again to rebuild the payload
+        # user = await query_user_by_id_async(user_id)  # You'll need this function
+
+        # if not user:
+        #     raise HTTPException(status_code=404, detail="User not found")
+
+        # Load trial info
+        trial_ref = users_coll.document(user_id).collection("plan").document("trial")
+        trial_snap = await asyncio.to_thread(trial_ref.get)
+
+        has_used_trial = False
+        trial_date = None
+        if trial_snap.exists:
+            tdata = trial_snap.to_dict()
+            has_used_trial = bool(tdata.get("hasUsed", False))
+            trial_date = tdata.get("date")
+
+        # 🧠 Build consistent payload
+        token_payload = {
+        "sub": payload["sub"],
+        "username": payload["username"],
+        "email": payload["email"],
+        "isSubscribed": payload["isSubscribed"],
+        "hasUsedTrial": payload["hasUsedTrial"],
+    }
+
         new_access_token = create_access_token(
-            {"sub": user_id},
+            data=token_payload,
             expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         )
-        # Generate a new CSRF token
-        new_csrf_token = generate_csrf_token()
 
-        # Create a response that sets the new access token and CSRF token in cookies
+        new_csrf_token = generate_csrf_token()
         response = JSONResponse(content={"message": "Token refreshed"})
         response.set_cookie(key="access_token", value=new_access_token, httponly=True)
-        # The CSRF token is set as non-HttpOnly so it can be read by JavaScript
         response.set_cookie(key="csrf_token", value=new_csrf_token, httponly=False)
         return response
 
     except JWTError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=401,
             detail="Invalid refresh token"
         )

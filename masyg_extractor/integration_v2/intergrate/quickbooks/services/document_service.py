@@ -197,7 +197,7 @@ class DocumentService:
 
         except Exception as e:
             logger.error(f"Exception in send_invoice")
-            print(str(e))
+
             await self.context.log_manager.send_log(f"❌ Failed to create invoice please try again with file {document.transaction_id}",
                            log_key=f"{self.doc_type.lower()}-log-message", user_room=self.context.client_id)
 

@@ -12,6 +12,7 @@ users (collection)
        ├── username: string
        ├── createdAt: Timestamp
        └── updatedAt: Timestamp
+        
        
        ├── groups (subcollection)
        │      └── {group_id} (document)

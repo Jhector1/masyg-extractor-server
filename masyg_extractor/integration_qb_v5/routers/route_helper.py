@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Union
 from fastapi import APIRouter, Request, HTTPException, status, Depends
 
 from masyg_extractor.global_helper import transform_value
-from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
-from masyg_extractor.integration_v4.domain.models import *
-from masyg_extractor.integration_v4.intergrate.quickbooks.adapter import XeroClientAdapter
-from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
+from masyg_extractor.integration_qb_v5.domain.models import *
+from masyg_extractor.integration_qb_v5.intergrate.quickbooks.adapter import QuickBooksClientAdapter
+from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.xero.services.item_services import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
@@ -55,7 +55,7 @@ def create_item(line_item: Dict[str, Any], transaction_id) -> Item:
         ),
         transaction_id=transaction_id,
 
-        sku=generate_sku(name, 6),
+        sku=generate_sku(name),
         QtyOnHand=line_item.get("QtyOnHand", 1),
         type=line_item.get("type"),
         tax_code=transform_value(line_item.get("tax"), "NON"),
@@ -195,20 +195,20 @@ async def handle_quickbooks_request(
         )
 
     # Clear previous log progress and send initial log message.
-    # progress_logger.clear()
+    progress_logger.clear()
     log_mgr = LogManager()
-    # await log_mgr.clear_queue()
-    # asyncio.create_task(
-    #     log_mgr.send_log(
-    #         f"⚙️ Processing {doc_type}...",
-    #         log_key=f"{doc_type.lower()}-log-message",
-    #         user_room=client_id,
-    #     )
-    # )
+    await log_mgr.clear_queue()
+    asyncio.create_task(
+        log_mgr.send_log(
+            f"⚙️ Processing {doc_type}...",
+            log_key=f"{doc_type.lower()}-log-message",
+            user_room=client_id,
+        )
+    )
     logger.info(f"Client ID: {client_id}")
 
     # Create integration context and repository
-    repo = QuickBooksFirestoreService(user_id=user_id)
+    repo = QuickBooksFirestoreService(user_id=user_id,integration="quickbooks")
     context = create_integration_context(
         log_manager=log_mgr,
         request=request,
@@ -218,7 +218,7 @@ async def handle_quickbooks_request(
         global_progress=global_progress,
         doc_type=doc_type,
     )
-    qb_client = XeroClientAdapter(context)
+    qb_client = QuickBooksClientAdapter(context)
     service = service_factory(context, repo, qb_client)
 
     # Parse JSON payload

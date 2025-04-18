@@ -4,12 +4,12 @@ from typing import Dict, List, Optional, cast
 
 from fastapi import Request
 
-from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
-from masyg_extractor.integration_v4.domain.models import Item
-from masyg_extractor.integration_v4.entity_helper import EntityHelper
-from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationClientAdapter
-from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
-from masyg_extractor.integration_v4.utils import extract_uuid
+from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
+from masyg_extractor.integration_qb_v5.domain.models import Item
+from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
+from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
+from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integration_qb_v5.utils import extract_uuid
 from masyg_extractor.integrations.xero.services.item_services import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.my_log import logger
@@ -61,8 +61,8 @@ class ItemService:
             logger.error(f"Error creating single item payload for item '{item.name}': {str(e)}")
             return {}
 
-    @staticmethod
-    def create_bulk_item_payload(item: Item) -> dict:
+    # @staticmethod
+    async def create_bulk_item_payload(self, item: Item) -> dict:
         """
         Generate payload for creating an item in bulk.
         Combines a truncated UUID (from transaction_id) with a short SKU segment.
@@ -73,14 +73,77 @@ class ItemService:
                 item.sku = generate_sku(name)
             # Create a short code: first part from UUID and second from SKU (max 5 characters)
             code_prefix = extract_uuid(item.transaction_id)[:20]
-            code_suffix = item.sku if item.sku else generate_sku(name, 6)
+            code_suffix = item.sku[:5] if item.sku else generate_sku(name)[:5]
             # code_suffix =  generate_sku(name)[:5]
+            income_account_id = item.income_account.id
+            expense_account_id = item.expense_account.id
+            if not item.name:
+                item_name = "Unnamed Item"
+            code_prefix = extract_uuid(item.transaction_id)[:20]
+            code_suffix = generate_sku(name)[:5]
+            if not item.income_account.id or not item.expense_account.id:
+                try:
+                    default_income, default_expense = await self.get_default_service_accounts()
+                    if not income_account_id:
+                        income_account_id = default_income
+                    if not expense_account_id:
+                        expense_account_id = default_expense
+                except Exception as e:
+                    logger.error(f"Could not fetch default accounts: {e}")
+                    raise
+
+            payload = {
+                "TrackQtyOnHand": item.type == "Inventory",
+
+                "QtyOnHand": int(item.QtyOnHand) if item.QtyOnHand is not None else 1,
+                "Name": remove_non_alphanumeric(item.name) if item.name else "Unnamed Item",
+                # "Sku": item.sku if item.sku is not None else "",
+                # "UnitPrice": float(item.unit_price) if item.unit_price is not None else 0,
+                # "Description": item.description if item.description is not None else "",
+                "Type": item.type if item.type is not None else "Service",
+                # "SalesTaxCodeRef": {
+                #     "value": item_data.get("sales_tax_value", 0),
+                #     "name": item_data.get("sales_tax_code", ""),
+                # },
+
+                "Active": True,
+                "IncomeAccountRef": {
+                    "value": income_account_id,
+                    "name": item.income_account.name if item.income_account.name is not None else "Service Fee Income"
+                },
+                "ExpenseAccountRef": {
+                    "value": expense_account_id,
+                    "name": item.expense_account.name if item.expense_account.name is not None else "Cost of Goods Sold"
+                }
+            }
+
+            if item.type == "Inventory":
+                payload["AssetAccountRef"] = {
+                    "name": "Inventory Asset",
+                    "value": "81"
+                }
+                from datetime import date
+
+                # Get today's date
+                today = date.today()
+
+                payload["InvStartDate"] = today.strftime("%Y-%m-%d")
+                payload["PurchaseCost"] = float(item.unit_price)  # Added required field for inventory cost
+                payload["ExpenseAccountRef"] = {
+                    "value": "80",
+                    "name": "Cost of Goods Sold"
+                }
+                payload["IncomeAccountRef"] = {
+                    "name": "Sales of Product Income",
+                    "value": "79"
+                }
 
             return {
-                "Code": f"{code_prefix}_{code_suffix}",
-                "Name": name,
-                "Description": item.description
+                "bId": f"{code_prefix}_{code_suffix}",
+                "Item": payload,
+                "operation": "create"
             }
+
         except Exception as e:
             logger.error(f"Error creating bulk item payload for item '{item.name}': {str(e)}")
             return {}
@@ -191,8 +254,8 @@ class ItemService:
         """
         try:
             name_key = "Name"
-            id_key = "Code" #using instead of real_ids
-            entity = "Items"
+            id_key = "Id"  # using instead of real_ids
+            entity = "Item"
 
             # Flatten the list of items from dictionary values.
             flat_items: List[Item] = [item for sublist in local_items.values() for item in sublist]
@@ -205,7 +268,7 @@ class ItemService:
 
             # Prepare payload for each new item.
             payload_items = [self.create_bulk_item_payload(item) for item in non_existing_items]
-            payload = {"Items": payload_items}
+            payload = {"BatchItemRequest": payload_items}
 
             logger.info(f"Creating bulk items with payload: {payload}")
             all_current_items = cast(

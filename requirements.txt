@@ -41,4 +41,4 @@ itsdangerous==2.2.0
 python-multipart==0.0.5
 tf_keras==2.19.0
 python-jose==3.4.0
-
+apscheduler==3.11.0

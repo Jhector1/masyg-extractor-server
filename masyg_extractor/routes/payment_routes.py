@@ -1,5 +1,7 @@
 import os
 import time
+from datetime import datetime
+
 import stripe
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -144,6 +146,55 @@ async def customer_portal(request: Request, current_user: dict = Depends(get_cur
     except Exception as e:
         logger.error(f"Error creating customer portal session: {e}")
         raise HTTPException(status_code=400, detail="Failed to create customer portal session")
+
+
+from fastapi import  status
+
+
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
+from firebase_admin import firestore
+
+from masyg_extractor.config.jwt_config import get_current_user_from_cookie
+
+router = APIRouter(prefix="/payment")
+firestore_db = firestore.client()
+users = firestore_db.collection("users")
+
+@router.post("/plan/trial")
+async def activate_free_trial(
+    current_user: dict = Depends(get_current_user_from_cookie)
+):
+    # 1) Identify the user
+    uid = current_user.get("userId")
+    if not uid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Not authenticated")
+
+    # 2) Point at /users/{uid}/plan/trial
+    trial_doc = users.document(uid).collection("plan").document("trial")
+    snapshot = trial_doc.get()
+
+    # 3) If they've already used it, error out
+    if snapshot.exists and snapshot.to_dict().get("hasUsed", False):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Free trial already used")
+
+    # 4) Write hasUsed + date in subcollection
+    trial_doc.set({
+        "hasUsed": True,
+        "date": datetime.utcnow()
+    }, merge=True)
+
+    # 5) ALSO mark them subscribed at the top‐level user doc
+    users.document(uid).update({"isSubscribed": True})
+
+    return JSONResponse({
+        "hasUsed":     True,
+        "date":        datetime.utcnow().isoformat(),
+        "isSubscribed": True
+    })
 
 @router.post("/webhook")
 async def webhook_received(request: Request):

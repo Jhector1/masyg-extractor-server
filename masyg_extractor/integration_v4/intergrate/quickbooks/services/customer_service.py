@@ -167,7 +167,7 @@ class CustomerService:
                 List[Customer],
                 await self.entity_helper.get_non_existing_entities(customer_list, entity, name_key, id_key)
             )
-            print("non-existing customer",non_existing_customers)
+            # print("non-existing customer",non_existing_customers)
 
             # Build the payload for bulk creation.
             payload_customers = [self.create_bulk_customer_payload(customer) for customer in non_existing_customers]

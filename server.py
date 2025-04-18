@@ -8,7 +8,9 @@ Run with an ASGI server such as uvicorn:
 """
 
 import os
+from datetime import datetime, timedelta
 
+from firebase_admin import firestore
 from starlette.middleware.base import BaseHTTPMiddleware
 
 ENV = os.getenv("FAST_API_ENV", "development").lower()
@@ -197,6 +199,49 @@ register_routers(app)
 #     logger.setLevel(logging.INFO)
 
 # Set up Socket.IO.
+
+db = firestore.client()
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+def expire_free_trials():
+    cutoff = datetime.utcnow() - timedelta(days=30)
+    cutoff_ts = firestore.Timestamp.from_datetime(cutoff)
+
+    # Loop through all users (you could optimize via batch / pagination)
+    for user_snap in db.collection("users").stream():
+        uid = user_snap.id
+        trial_ref = db.collection("users").document(uid) \
+                     .collection("plan").document("trial")
+        trial_snap = trial_ref.get()
+        if not trial_snap.exists:
+            continue
+
+        trial = trial_snap.to_dict()
+        if trial.get("hasUsed") and trial["date"] <= cutoff_ts:
+            # 1) flip isSubscribed off
+            db.collection("users").document(uid).update({
+                "isSubscribed": False
+            })
+            # 2) optional: delete or mark the trial doc
+            # trial_ref.delete()
+
+    print("✅ Expired any >30‑day trials.")
+
+# 3) Wire up APScheduler in the startup event
+@app.on_event("startup")
+def start_scheduler():
+    scheduler = AsyncIOScheduler(timezone="America/Chicago")
+    # run daily at midnight in Chicago time
+    scheduler.add_job(expire_free_trials, "cron", hour=0, minute=0)
+    scheduler.start()
+
+
+
+
+
+
+
+
 import socketio
 
 @app.post("/client-id")
