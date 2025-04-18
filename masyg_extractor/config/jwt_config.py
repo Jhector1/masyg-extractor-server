@@ -35,7 +35,6 @@ def get_current_user_from_cookie(
     request: Request,
     csrf_token_header: Optional[str] = Header(None, alias="X-CSRF-Token")
 ):
-
     token = request.cookies.get("access_token")
     if not token:
         raise HTTPException(
@@ -49,9 +48,16 @@ def get_current_user_from_cookie(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
             )
-        # For GET requests, you might bypass CSRF header check
+
+        # ✅ Skip CSRF checks for GET requests
         if request.method == "GET":
-            csrf_token_header = request.cookies.get("csrf_token")
+            return {
+                "userId": user_id,
+                "username": payload.get("username"),
+                "email": payload.get("email")
+            }
+
+        # For POST/PUT/DELETE → enforce CSRF
         csrf_cookie = request.cookies.get("csrf_token")
         if not csrf_cookie:
             raise HTTPException(
@@ -67,8 +73,8 @@ def get_current_user_from_cookie(
             "username": payload.get("username"),
             "email": payload.get("email")
         }
-    except JWTError:
 
+    except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials"
         )
