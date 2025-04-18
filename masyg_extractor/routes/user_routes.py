@@ -737,7 +737,7 @@ async def refresh_token(request: Request):
         "username": payload["username"],
         "email": payload["email"],
         "isSubscribed": payload["isSubscribed"],
-        "hasUsedTrial": payload["hasUsedTrial"],
+        "hasUsedTrial":has_used_trial #payload["hasUsedTrial"],
     }
 
         new_access_token = create_access_token(

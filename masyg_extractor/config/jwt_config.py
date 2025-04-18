@@ -23,11 +23,16 @@ ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
+    now = datetime.utcnow()
+    expire = now + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    to_encode.update({
+        "iat": now,
+        # "nbf": now,
+        "exp": expire,
+        "jti": str(uuid.uuid4()),          # optional: a unique ID
+    })
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 from typing import Optional
 from fastapi import Header
 
@@ -42,7 +47,16 @@ def get_current_user_from_cookie(
         )
 
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token,
+                             SECRET_KEY,
+                             algorithms=[ALGORITHM],
+
+                             options={
+                                 "verify_signature": True,
+                                 "verify_exp": True,
+                                 "verify_nbf": False,  # ← disable nbf check
+                             }
+                             )
         user_id = payload.get("sub")
         if user_id is None:
             raise HTTPException(
@@ -83,7 +97,8 @@ def get_current_user_from_cookie(
 
 def verify_jwt_token(token: str):
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM],             options={"verify_nbf": False}
+)
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
