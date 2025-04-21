@@ -149,10 +149,10 @@ class DocumentService:
             logger.info(f"{self.doc_type} payload prepared for doc_number: {doc_number}")
 
             logger.info("About to call quickbooks_request")
-            print(payload)
-            print(self.doc_type)
+
+
             document_id = await self.entity_helper.create_entity(self.doc_type, payload)
-            print(document_id)
+
             # # Offload the synchronous HTTP request.
             # response = await quickbooks_request(
             #     request,

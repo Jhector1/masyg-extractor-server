@@ -5,7 +5,7 @@ import string
 import time
 import asyncio
 import concurrent.futures
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Request, status, BackgroundTasks, Depends,Response
 from fastapi_mail import MessageSchema
@@ -118,7 +118,7 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
         'password': generate_password_hash(password, method='pbkdf2:sha256'),
         'isSubscribed': is_subscribed,
         'hasUsedTrial': False,
-        'createdAt': datetime.utcnow().isoformat()  # or datetime.now().isoformat() for local time
+        'createdAt': datetime.now(timezone.utc).isoformat()  # or datetime.now().isoformat() for local time
     }
     user_added = await add_new_user_async(new_user, timeout_secs=10)
 
@@ -355,7 +355,7 @@ class ResetRequest(BaseModel):
     email: EmailStr
 
 
-import datetime
+
 
 
 @router.post("/request-reset")
@@ -427,7 +427,7 @@ async def request_reset(request: Request, reset_req: ResetRequest, background_ta
           <a href="{reset_url}" class="btn">Reset Password</a>
           <p>If you did not request a password reset, please ignore this email.</p>
           <div class="footer">
-            <p>&copy; {datetime.datetime.now().year} Masyg Link. All rights reserved.</p>
+            <p>&copy; {datetime.now(timezone.utc).year} Masyg Link. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -523,7 +523,7 @@ async def delete_my_account(
     request: Request,
     current_user: dict = Depends(get_current_user_from_cookie)
 ):
-    print('current_user', current_user)
+
     # Validate that the authenticated user has a valid user ID.
     user_id = current_user.get('userId')
     # print(user_id, "user_id")
@@ -596,73 +596,179 @@ async def delete_my_account(
 
 
 users_coll = firestore_db.collection("users")
+
+
+ACCESS_TOKEN_EXPIRE_MINUTES = 15
+REFRESH_TOKEN_EXPIRE_DAYS   = 30
+
+# def create_access_token(data: dict, expires_delta: timedelta):
+#     # returns a JWT string, as you already have implemented
+#     return jwt.encode(
+#         {**data, "exp": datetime.now(timezone.utc).isoformat() + expires_delta},
+#         SECRET_KEY,
+#         algorithm=ALGORITHM
+#     )
+
+def create_refresh_token(data: dict) -> str:
+    return create_access_token(
+        data=data,
+        expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    )
+
 @router.post("/login")
 async def login(request: Request, response: Response):
-    data = await request.json()
-    email = data.get("email", "").lower().strip()
-    password = data.get("password")
-    google_id_token = data.get("googleIdToken")
+    # 2. Parse incoming JSON
+    data           = await request.json()
+    email          = data.get("email", "").lower().strip()
+    password       = data.get("password")
+    google_id_token= data.get("googleIdToken")
+    remember_me    = data.get("rememberMe", False)
 
-    if not email and not google_id_token:
-        raise HTTPException(status_code=400, detail="Missing credentials")
-
-    # 1) Fetch or create the top‐level user record
+    # 3. Authenticate or create user
     if google_id_token:
-        decoded = await verify_id_token_async(google_id_token, timeout_secs=10)
+        decoded = await verify_id_token_async(google_id_token)
         email, username = decoded["email"], decoded.get("name", "Google User")
-        user = await query_user_by_email_async(email, timeout_secs=10)
-        if not user:
-            user = await add_new_user_async({
-                "email": email,
-                "username": username,
-                "password": generate_password_hash(uuid.uuid4().hex, method="pbkdf2:sha256"),
-                "isSubscribed": False,
-            }, timeout_secs=10)
+        user = await query_user_by_email_async(email) or await add_new_user_async({
+            "email": email,
+            "username": username,
+            "password": generate_password_hash(uuid.uuid4().hex, method="pbkdf2:sha256"),
+            "isSubscribed": False,
+        })
     else:
-        user = await query_user_by_email_async(email, timeout_secs=10)
+        user = await query_user_by_email_async(email)
         if not user or not check_password_hash(user["password"], password):
-            raise HTTPException(status_code=400, detail="Invalid email or password")
+            raise HTTPException(status_code=400, detail="Invalid credentials")
 
     user_id = user["userId"]
 
-    # 2) Load the trial doc from /users/{uid}/plan/trial
+    # 4. Gather trial info (unchanged)
     trial_ref = users_coll.document(user_id).collection("plan").document("trial")
-    trial_snap = await asyncio.to_thread(trial_ref.get)
+    trial_snap= await asyncio.to_thread(trial_ref.get)
+    has_used_trial = trial_snap.exists and trial_snap.to_dict().get("hasUsed", False)
+    trial_date     = trial_snap.to_dict().get("date") if trial_snap.exists else None
 
-    has_used_trial = False
-    trial_date = None
-    if trial_snap.exists:
-        tdata = trial_snap.to_dict()
-        has_used_trial = bool(tdata.get("hasUsed", False))
-        trial_date = tdata.get("date")  # this will be a Firestore Timestamp
-
-    # 3) Build payload and issue JWT
+    # 5. Build consistent payload
     user_payload = {
-        "userId":    user_id,
-        "username":  user.get("username"),
-        "email":     user.get("email"),
-        "isSubscribed": user.get("isSubscribed", False),
-        "hasUsedTrial": has_used_trial,
-        "trialDate": trial_date.isoformat() if trial_date else None
+        "userId":      user_id,
+        "username":    user.get("username"),
+        "email":       user.get("email"),
+        "isSubscribed":user.get("isSubscribed", False),
+        "hasUsedTrial":has_used_trial,
+        "trialDate":    trial_date.isoformat() if trial_date else None
     }
-    # print(user_payload, 'gttgg')
+    #print
 
-    access_token = create_access_token(
-        data={
-            "sub": user_id,
-            "username": user_payload.get("username"),
-            "email": user_payload.get("email"),
-            # you can embed trial status in the token if desired
-            "isSubscribed": user_payload["isSubscribed"],
-            "hasUsedTrial": user_payload["hasUsedTrial"],
-        },
+    # 6. Create tokens
+    access_token  = create_access_token(
+        data={ "sub": user_id, **user_payload },
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
+    refresh_token = create_refresh_token(   data={ "sub": user_id, **user_payload },
+   )
 
-    response.set_cookie("access_token", access_token)
-    response.set_cookie("csrf_token", generate_csrf_token())
+    # 7. Set cookies
+    # → Access token (short‑lived, HTTP‑only)
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=True,
+        samesite="lax"
+    )
 
+    # → Refresh token (long‑lived if remember_me)
+    refresh_opts = dict(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+
+    if remember_me:
+        refresh_opts["max_age"] = REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
+    response.set_cookie(**refresh_opts)
+
+    # → CSRF token (non‑HTTP‑only, so your front end can read & inject it)
+    csrf = generate_csrf_token()
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf,
+        httponly=False,
+        secure=True,
+        samesite="lax"
+    )
+
+    # 8. Return user data
     return {"message": "Login successful", "user": user_payload}
+
+# @router.post("/login")
+# async def login(request: Request, response: Response):
+#     data = await request.json()
+#     email = data.get("email", "").lower().strip()
+#     password = data.get("password")
+#     google_id_token = data.get("googleIdToken")
+#
+#     if not email and not google_id_token:
+#         raise HTTPException(status_code=400, detail="Missing credentials")
+#
+#     # 1) Fetch or create the top‐level user record
+#     if google_id_token:
+#         decoded = await verify_id_token_async(google_id_token, timeout_secs=10)
+#         email, username = decoded["email"], decoded.get("name", "Google User")
+#         user = await query_user_by_email_async(email, timeout_secs=10)
+#         if not user:
+#             user = await add_new_user_async({
+#                 "email": email,
+#                 "username": username,
+#                 "password": generate_password_hash(uuid.uuid4().hex, method="pbkdf2:sha256"),
+#                 "isSubscribed": False,
+#             }, timeout_secs=10)
+#     else:
+#         user = await query_user_by_email_async(email, timeout_secs=10)
+#         if not user or not check_password_hash(user["password"], password):
+#             raise HTTPException(status_code=400, detail="Invalid email or password")
+#
+#     user_id = user["userId"]
+#
+#     # 2) Load the trial doc from /users/{uid}/plan/trial
+#     trial_ref = users_coll.document(user_id).collection("plan").document("trial")
+#     trial_snap = await asyncio.to_thread(trial_ref.get)
+#
+#     has_used_trial = False
+#     trial_date = None
+#     if trial_snap.exists:
+#         tdata = trial_snap.to_dict()
+#         has_used_trial = bool(tdata.get("hasUsed", False))
+#         trial_date = tdata.get("date")  # this will be a Firestore Timestamp
+#
+#     # 3) Build payload and issue JWT
+#     user_payload = {
+#         "userId":    user_id,
+#         "username":  user.get("username"),
+#         "email":     user.get("email"),
+#         "isSubscribed": user.get("isSubscribed", False),
+#         "hasUsedTrial": has_used_trial,
+#         "trialDate": trial_date.isoformat() if trial_date else None
+#     }
+#     # print(user_payload, 'gttgg')
+#
+#     access_token = create_access_token(
+#         data={
+#             "sub": user_id,
+#             "username": user_payload.get("username"),
+#             "email": user_payload.get("email"),
+#             # you can embed trial status in the token if desired
+#             "isSubscribed": user_payload["isSubscribed"],
+#             "hasUsedTrial": user_payload["hasUsedTrial"],
+#         },
+#         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+#     )
+#
+#     response.set_cookie("access_token", access_token)
+#     response.set_cookie("csrf_token", generate_csrf_token())
+#
+#     return {"message": "Login successful", "user": user_payload}
 
 
 @router.get("/current")

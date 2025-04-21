@@ -101,7 +101,7 @@ class EntityHelper:
 
         # if payload_extra:
         #     payload.update(payload_extra)
-        print(f"creating_{entity.lower()}")
+
         response = await self.client.request(
             self.repo.get_integration_token(),
             entity,
@@ -110,7 +110,7 @@ class EntityHelper:
             method="POST",
 
         )
-        print(response)
+
         logger.info(f"create_{entity.lower()} response received.")
         self.context.progress[f"creating_{entity.lower()}"] = self.context.progress_logger.getWeight(
             f"creating_{entity.lower()}")

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Request, HTTPException, status, Depends, Header
 from fastapi.responses import JSONResponse
 from jose import jwt, JWTError
@@ -23,7 +23,7 @@ ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode = data.copy()
     to_encode.update({
