@@ -414,6 +414,7 @@ async def process_chunk(chunk_text,progress_logger: ExtractorProgressLog, file_p
             ),
         },
     ]
+    ENV = os.getenv("FAST_API_ENV", "development").lower()
 
     # Implement retry logic for the GPT call
     max_retries = 3
@@ -421,7 +422,9 @@ async def process_chunk(chunk_text,progress_logger: ExtractorProgressLog, file_p
     for attempt in range(max_retries):
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4" if ENV != "development" else "gpt-3.5-turbo" ,
+
+                # model="gpt-3.5-turbo",
                 messages=messages,
                 max_tokens=1500,
                 temperature=0.0,

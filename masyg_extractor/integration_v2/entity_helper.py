@@ -84,13 +84,10 @@ class EntityHelper:
         """
         steps = 5
 
-
         for step in range(steps):
             await asyncio.sleep(0.3)
-            self.context.progress[f"creating_{entity.lower()}"] = ((
-                                                                               step + 1) / steps) * IntegrationsProgressLog.CREATING_CUSTOMER_WEIGHT
-            await self.context.progress_logger.safe_emit_progress(
-                self.context.progress_logger.calculate_overall_progress(self.context.progress))
+            self.context.progress[f"creating_{entity.lower()}"] = ((step + 1) / steps) * IntegrationsProgressLog.CREATING_CUSTOMER_WEIGHT
+            await self.context.progress_logger.safe_emit_progress(self.context.progress_logger.calculate_overall_progress(self.context.progress))
 
         # sanitized_name = display_name.lower().replace(' ', '_').replace("'", "")
         # email_address = f"{sanitized_name}@example.com"

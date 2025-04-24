@@ -16,7 +16,8 @@ from masyg_extractor.integrations.xero.xero_client import xero_request
 from masyg_extractor.services.log_manager import LogManager
 from masyg_extractor.services.my_log import send_log, logger
 from masyg_extractor.integrations.xero.authentication.xero_auth import router as auth_router
-from masyg_extractor.services.progress_log import IntegrationsProgressLog, get_integrations_progress_logger_factory
+from masyg_extractor.services.progress_log import IntegrationsProgressLog, get_integrations_progress_logger_factory, \
+    XeroIntegrationsProgressLog
 
 router = APIRouter(prefix="/integrations/xero")
 router.include_router(auth_router, prefix="", tags=["Xero Auth"])
@@ -173,8 +174,8 @@ router.include_router(auth_router, prefix="", tags=["Xero Auth"])
 @router.post("/send-invoice-in-bulk")
 async def send_invoice_bulk_route(
     request: Request,
-    global_progress: dict = Depends(IntegrationsProgressLog.get_file_progress_dict),
-    progress_logger: IntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("xero-invoice-progress")),
+    global_progress: dict = Depends(XeroIntegrationsProgressLog.get_file_progress_dict),
+    progress_logger: XeroIntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("xero-invoice-progress")),
     current_user: dict = Depends(get_current_user_from_cookie),
 ):
     """
@@ -207,6 +208,7 @@ async def send_invoice_bulk_route(
                                        context=context,
                                        repo=repo,client=xero_client)
     clean_data = await normalize_payload(data, "invoice_data")
+
     return await document_service.send_document_in_bulk(clean_data,     await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(global_progress))
  )
 

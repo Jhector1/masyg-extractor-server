@@ -23,6 +23,7 @@ from masyg_extractor.integration_v4.intergrate.quickbooks.services.customer_serv
 from masyg_extractor.integrations.quickbooks.services.item_service import check_item_exists, create_item
 from masyg_extractor.integrations.transaction_helpers import generate_doc_number, check_duplicate_record
 from masyg_extractor.services.progress_log import IntegrationsProgressLog
+from masyg_extractor.utils.extensions import sio
 from masyg_extractor.utils.tool import get_original_filename
 
 #print
@@ -174,6 +175,7 @@ class DocumentService:
                         "InvoiceNumber": doc_number,
                     }
                     document_payload_bulk.append(payload)
+                    await sio.emit("xero-invoice-progress", {"progress": 100}, room=self.context.client_id)
 
                     invoice_record = {
                         "group_id": document.group_id,
@@ -210,7 +212,10 @@ class DocumentService:
 
         except Exception as e:
             error_msg = f"❌ Error in bulk sending of {self.doc_type} documents: {str(e)}"
+            await sio.emit("xero-invoice-progress", {"progress": 100}, room=self.context.client_id)
+
             await self._log(error_msg, "error")
+
             return {"error": str(e)}
 
     async def send_document(self, document: Document, share_progress: float) -> Dict[str, Any] or str:

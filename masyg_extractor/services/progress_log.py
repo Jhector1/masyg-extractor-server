@@ -129,6 +129,41 @@ class IntegrationsProgressLog(ProgressLog):
             return IntegrationsProgressLog.CREATING_DOCUMENTS_WEIGHT
         else:
             return 10
+
+
+
+
+class XeroIntegrationsProgressLog(ProgressLog):
+    CREATING_ITEM_WEIGHT = 20.0
+    CREATING_CONTACT_WEIGHT = 30.0
+    CREATING_DOCUMENTS_WEIGHT = 50.0
+
+
+    @staticmethod
+    def get_file_progress_dict() -> Dict[str, float]:
+        """
+        Returns a dictionary representing the initial progress for each extraction stage.
+        Each stage starts at 0.0 progress.
+
+        :return: Dictionary with keys for each stage.
+        """
+        return {
+            "creating_items": 0.0,
+            "creating_contacts": 0.0,
+            "creating_invoices": 0.0,
+
+        }
+    def getWeight(self, title):
+        if title.lower() == "creating_items":
+            return XeroIntegrationsProgressLog.CREATING_ITEM_WEIGHT
+        elif title.lower() == "creating_contacts":
+            return XeroIntegrationsProgressLog.CREATING_CONTACT_WEIGHT
+        elif title.lower() == "creating_invoices":
+
+            return XeroIntegrationsProgressLog.CREATING_DOCUMENTS_WEIGHT
+        else:
+            return 10
+
 async def get_integrations_progress_logger(request: Request, default_log_key ="quickbooks-progress") -> ExtractorProgressLog:
     # Extract client ID from the session
     client_id = request.session.get("client_id", 'Guest')

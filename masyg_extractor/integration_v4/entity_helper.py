@@ -96,9 +96,10 @@ class EntityHelper:
         """
         Simulates progress for a given task by updating progress logs.
         """
+        print(f"creating_{task.lower()}")
         for step in range(steps):
             await asyncio.sleep(0.3)
-            self.context.progress[f"creating_{task.lower()}"] = ((step + 1) / steps) * IntegrationsProgressLog.CREATING_CUSTOMER_WEIGHT
+            self.context.progress[f"creating_{task.lower()}"] = ((step + 1) / steps) * self.context.progress_logger.getWeight(f"creating_{task.lower()}")
             overall = self.context.progress_logger.calculate_overall_progress(self.context.progress)
             await self.context.progress_logger.safe_emit_progress(overall)
 
