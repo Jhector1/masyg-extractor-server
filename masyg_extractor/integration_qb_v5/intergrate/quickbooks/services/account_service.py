@@ -16,11 +16,11 @@ class AccountService:
         self.entity_helper = EntityHelper(context, repo, client)
 
     async def get_all_accounts(self):
-        where_clause = "Type == 'REVENUE'"
+        # where_clause = "Type == 'REVENUE'"
         return await self.entity_helper.get_all_entities(
-            "Accounts",
-            id_field="AccountID",
-            where_clause=where_clause
+            "Account",
+            id_field="Id",
+            # where_clause=where_clause
         )
 
     async def check_account_exists(self,

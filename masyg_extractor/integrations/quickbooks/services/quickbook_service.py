@@ -53,7 +53,7 @@ async def get_entities(request: Request, entity_type: str, user_id: str):
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json"
     }
-    params = {"query": f"SELECT * FROM {entity_type}"}
+    params = {"query": f"SELECT * FROM {entity_type} STARTPOSITION 1 MAXRESULTS 1000"}
 
     try:
         response = requests.get(url, headers=headers, params=params)

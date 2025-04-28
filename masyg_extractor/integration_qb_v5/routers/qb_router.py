@@ -22,7 +22,7 @@ from masyg_extractor.integrations.quickbooks.services.quickbook_service import g
 from masyg_extractor.integrations.xero.xero_client import xero_request
 from masyg_extractor.services.log_manager import LogManager
 from masyg_extractor.services.my_log import send_log, logger
-from masyg_extractor.integrations.xero.authentication.xero_auth import router as auth_router
+from masyg_extractor.integrations.quickbooks.authentication.quickbook_auth import router as auth_router
 from masyg_extractor.services.progress_log import IntegrationsProgressLog, get_integrations_progress_logger_factory
 
 router = APIRouter(prefix="/integrations/quickbooks")
@@ -178,11 +178,11 @@ router.include_router(auth_router, prefix="", tags=["Quickbooks Auth"])
 #             record_key: item
 #         }
 
-@router.get("/income-accounts")
+@router.post("/send-salereceipt-in-bulk")
 async def send_invoice_bulk_route(
     request: Request,
     global_progress: dict = Depends(IntegrationsProgressLog.get_file_progress_dict),
-    progress_logger: IntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("invoice-log-message")),
+    progress_logger: IntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("quickbooks-invoice-progress")),
     current_user: dict = Depends(get_current_user_from_cookie),
 ):
     """
@@ -196,23 +196,88 @@ async def send_invoice_bulk_route(
     user_id: str = current_user["userId"]
 
     repo = QuickBooksFirestoreService(user_id=user_id, integration="quickbooks")
-    log_manager_= LogManager()
-
+    log_manager_ = LogManager()
+    data = await request.json()
 
     context = IntegrationContext(request=request,
                                  client_id=request.session["client_id"],
                                  progress_logger=progress_logger,
                                  progress=global_progress,
-                                 doct_type="Invoices",
+                                 doct_type="SalesReceipt",
                                  log_manager=log_manager_,
                                  user_id=user_id,
                                  )
     xero_client = QuickBooksClientAdapter(context)
-    account_service = AccountService(context=context,
-                                     repo=repo,
-                                     client=xero_client
-                                     )
-    return await account_service.get_all_accounts()
+    document_service = DocumentService(doc_type="SalesReceipt",
+                                       doc_number_prefix="REC",
+                                       context=context,
+                                       repo=repo, client=xero_client)
+    clean_data = await normalize_payload(data, "sales_receipt_data")
+
+    return await document_service.send_document_in_bulk(clean_data, await progress_logger.safe_emit_progress(
+        progress_logger.calculate_overall_progress(global_progress)))
+
+@router.post("/send-invoice-in-bulk")
+async def send_invoice_bulk_route(
+        request: Request,
+        global_progress: dict = Depends(IntegrationsProgressLog.get_file_progress_dict),
+        progress_logger: IntegrationsProgressLog = Depends(
+            get_integrations_progress_logger_factory("quickbooks-invoice-progress")),
+        current_user: dict = Depends(get_current_user_from_cookie),
+):
+    """
+    Handle sending invoices to QuickBooks.
+    This endpoint:
+      - Parses and validates the invoice payload.
+      - Creates a QuickBooks integration context and client adapter.
+      - Uses the InvoiceService to send invoices concurrently.
+      - Emits progress updates to the client.
+    """
+    user_id: str = current_user["userId"]
+
+    repo = QuickBooksFirestoreService(user_id=user_id, integration="quickbooks")
+    log_manager_ = LogManager()
+    data = await request.json()
+
+    context = IntegrationContext(request=request,
+                                 client_id=request.session["client_id"],
+                                 progress_logger=progress_logger,
+                                 progress=global_progress,
+                                 doct_type="Invoice",
+                                 log_manager=log_manager_,
+                                 user_id=user_id,
+                                 )
+    xero_client = QuickBooksClientAdapter(context)
+    document_service = DocumentService(doc_type="Invoice",
+                                       doc_number_prefix="Inv",
+                                       context=context,
+                                       repo=repo, client=xero_client)
+    clean_data = await normalize_payload(data, "invoice_data")
+
+    return await document_service.send_document_in_bulk(clean_data, await progress_logger.safe_emit_progress(
+        progress_logger.calculate_overall_progress(global_progress)))
+
+
+    # user_id: str = current_user["userId"]
+    #
+    # repo = QuickBooksFirestoreService(user_id=user_id, integration="quickbooks")
+    # log_manager_= LogManager()
+    #
+    #
+    # context = IntegrationContext(request=request,
+    #                              client_id=request.session["client_id"],
+    #                              progress_logger=progress_logger,
+    #                              progress=global_progress,
+    #                              doct_type="Invoices",
+    #                              log_manager=log_manager_,
+    #                              user_id=user_id,
+    #                              )
+    # xero_client = QuickBooksClientAdapter(context)
+    # account_service = AccountService(context=context,
+    #                                  repo=repo,
+    #                                  client=xero_client
+    #                                  )
+    # return await account_service.get_all_accounts()
 
 
 

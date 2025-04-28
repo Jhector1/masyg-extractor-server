@@ -14,7 +14,7 @@ class IntegrationClientAdapter(ABC):
     @abstractmethod
     async def request(
         self,
-        xero_token: Dict[str, Any],
+        quickbooks_token: Dict[str, Any],
         endpoint: str,
         method: str = "POST",
         payload: Optional[Dict[str, Any]] = None,

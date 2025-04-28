@@ -91,7 +91,7 @@ class DocumentService:
         except Exception as e:
             logger.error(f"Error storing records in Firebase: {str(e)}")
 
-    async def send_document_in_bulk(self, documents: List[Document], share_progress: float) -> Dict[str, Any]:
+    async def send_document_in_bulk(self, documents: List[Document], share_progress: float,invoice_status='ACCREC') -> Dict[str, Any]:
         """
         Processes a list of documents in bulk:
           - Performs a duplicate check.
@@ -165,12 +165,12 @@ class DocumentService:
                     valid_customer_id = valid_customer.id
                     doc_number = generate_doc_number(self.doc_number_prefix)
                     payload = {
-                        "Type": "ACCREC",
+                        "Type": invoice_status,
                         "Contact": {"ContactID": valid_customer_id},
                         "Date": format_date(document.date),
                         "DueDate": format_date(document.due_date),
                         "LineItems": line_items,
-                        "Status": "AUTHORISED",
+                        "Status": "DRAFT",
                         "CurrencyCode": "USD",
                         "InvoiceNumber": doc_number,
                     }

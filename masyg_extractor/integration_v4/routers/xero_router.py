@@ -213,6 +213,48 @@ async def send_invoice_bulk_route(
  )
 
 
+@router.post("/send-receipt-in-bulk")
+async def send_invoice_bulk_route(
+    request: Request,
+    global_progress: dict = Depends(XeroIntegrationsProgressLog.get_file_progress_dict),
+    progress_logger: XeroIntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("xero-invoice-progress")),
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
+    """
+    Handle sending invoices to QuickBooks.
+    This endpoint:
+      - Parses and validates the invoice payload.
+      - Creates a QuickBooks integration context and client adapter.
+      - Uses the InvoiceService to send invoices concurrently.
+      - Emits progress updates to the client.
+    """
+
+
+    user_id: str = current_user["userId"]
+
+    repo = QuickBooksFirestoreService(user_id=user_id, integration="xero")
+    log_manager_= LogManager()
+    data = await request.json()
+
+    context = IntegrationContext(request=request,
+                                 client_id=request.session["client_id"],
+                                 progress_logger=progress_logger,
+                                 progress=global_progress,
+                                 doct_type="Invoices",
+                                 log_manager=log_manager_,
+                                 user_id=user_id,
+                                 )
+    xero_client = XeroClientAdapter(context)
+    document_service = DocumentService(doc_type="Invoices",
+                                       doc_number_prefix="Inv",
+                                       context=context,
+                                       repo=repo,client=xero_client)
+    clean_data = await normalize_payload(data, "invoice_data")
+
+    return await document_service.send_document_in_bulk(clean_data,    await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(global_progress),'ACCPAY', )
+ )
+
+
 
 @router.get("/income-accounts")
 async def get_income_accounts(

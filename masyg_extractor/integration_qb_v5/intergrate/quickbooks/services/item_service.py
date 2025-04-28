@@ -267,7 +267,7 @@ class ItemService:
             )
 
             # Prepare payload for each new item.
-            payload_items = [self.create_bulk_item_payload(item) for item in non_existing_items]
+            payload_items = [await self.create_bulk_item_payload(item) for item in non_existing_items]
             payload = {"BatchItemRequest": payload_items}
 
             logger.info(f"Creating bulk items with payload: {payload}")

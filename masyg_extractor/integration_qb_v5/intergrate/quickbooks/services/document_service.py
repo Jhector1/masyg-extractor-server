@@ -1,15 +1,18 @@
 import asyncio
+import itertools
 from itertools import chain
-from typing import List, Dict, Any
+from pprint import pprint
+from typing import List, Dict, Any, Iterable
 from fastapi import Request
+from sympy.physics.units import amount
 
-from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
-from masyg_extractor.integration_v4.domain.models import Item, Customer, Invoice, Document
-from masyg_extractor.integration_v4.entity_helper import EntityHelper
-from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationClientAdapter
-from masyg_extractor.integration_v4.intergrate.quickbooks.services.item_service import ItemService
-from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
-from masyg_extractor.integration_v4.utils import extract_uuid
+from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
+from masyg_extractor.integration_qb_v5.domain.models import Item, Customer, Invoice, Document
+from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
+from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
+from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.item_service import ItemService
+from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integration_qb_v5.utils import extract_uuid
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.xero.services.item_services import generate_sku
 from masyg_extractor.integrations.xero.xero_router import get_items
@@ -20,10 +23,11 @@ from masyg_extractor.integrations.quickbooks.repository.firestore_repository imp
     store_invoice_record,
     invoice_exists_in_firestore
 )
-from masyg_extractor.integration_v4.intergrate.quickbooks.services.customer_service import CustomerService
+from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.customer_service import CustomerService
 from masyg_extractor.integrations.quickbooks.services.item_service import check_item_exists, create_item
 from masyg_extractor.integrations.transaction_helpers import generate_doc_number, check_duplicate_record
 from masyg_extractor.services.progress_log import IntegrationsProgressLog
+from masyg_extractor.utils.extensions import sio
 from masyg_extractor.utils.tool import get_original_filename
 
 
@@ -51,7 +55,7 @@ class DocumentService:
                 logger.info(message)
             await self.context.log_manager.send_log(
                 message,
-                log_key=f"{self.doc_type.lower()}-log-message",
+                log_key= "invoice-log-message",#f"{self.doc_type.lower()}-log-message",
                 user_room=self.context.client_id
             )
         except Exception as e:
@@ -92,6 +96,85 @@ class DocumentService:
         except Exception as e:
             logger.error(f"Error storing records in Firebase: {str(e)}")
 
+    @staticmethod
+    def split_array_(input_map: Dict[str, Any], capacity: int) -> List[Dict[str, Any]]:
+        """
+        Take each key→value in input_map (value can be iterable or single object)
+        and pack its items into buckets of total length ≤ capacity.
+        Non-iterable values (or str/bytes) are treated as single-item scalars, not lists.
+
+        Args:
+            input_map: mapping from str to any object or iterable of objects.
+            capacity: maximum number of items per bucket.
+
+        Returns:
+            List of buckets, where each bucket is a dict mapping keys to either
+            a scalar (for single-object inputs) or lists of objects.
+        """
+        result: List[Dict[str, Any]] = []
+        bucket: Dict[str, Any] = {}
+        used = 0
+
+        for key, value in input_map.items():
+            if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+                it = iter(value)
+                is_scalar = False
+            else:
+                it = iter([value])
+                is_scalar = True
+
+            while True:
+                if used == capacity:
+                    result.append(bucket)
+                    bucket = {}
+                    used = 0
+
+                to_take = capacity - used
+                chunk = list(itertools.islice(it, to_take))
+                if not chunk:
+                    break
+
+                if is_scalar:
+                    # scalar inputs always chunk len=1
+                    bucket[key] = chunk[0]
+                else:
+                    if key in bucket:
+                        bucket[key].extend(chunk)
+                    else:
+                        bucket[key] = chunk.copy()
+                used += len(chunk)
+
+        if bucket:
+            result.append(bucket)
+        return result
+
+    @staticmethod
+    def merge_buckets(buckets: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Reconstruct the original mapping from a list of bucket dicts produced by split_array.
+
+        Args:
+            buckets: list of bucket dicts (as returned by split_array).
+
+        Returns:
+            A dict mapping each key to either a single value or a concatenated list of values.
+        """
+        merged: Dict[str, Any] = {}
+        for bucket in buckets:
+            for key, items in bucket.items():
+                if key not in merged:
+                    merged[key] = items
+                else:
+                    existing = merged[key]
+                    if isinstance(existing, list) and isinstance(items, list):
+                        existing.extend(items)
+                    elif isinstance(existing, list):
+                        existing.append(items)
+                    elif isinstance(items, list):
+                        merged[key] = [existing] + items
+                    else:
+                        merged[key] = [existing, items]
+        return merged
     async def send_document_in_bulk(self, documents: List[Document], share_progress: float) -> Dict[str, Any]:
         """
         Processes a list of documents in bulk:
@@ -128,13 +211,32 @@ class DocumentService:
                 customers_map[key] = document.customer
                 items_map[key] = document.items
 
+
+
             if len(customers_map) == existing_documents:
                 raise Exception("No new documents to process.")
 
             # Create customers and items in bulk.
-            customers_created = await self.customer_service.create_customer_in_bulk(customers_map)
-            items_created = await self.item_service.create_item_in_bulk(items_map)
+            split_customers = []
+            split_items = []
 
+            print("Customer map", customers_map)
+            print("Item map", items_map)
+
+            customers_normalized = DocumentService.split_array_(customers_map, 30)
+            items_normalized = DocumentService.split_array_(items_map, 30)
+
+            print("Customer normalized", customers_normalized)
+            print("Item normalized", items_normalized)
+            for customers in customers_normalized:
+                split_customers.append(await self.customer_service.create_customer_in_bulk(customers))
+            for items in items_normalized:
+                split_items.append(await self.item_service.create_item_in_bulk(items))
+
+            customers_created = DocumentService.merge_buckets(split_customers)
+            items_created =  DocumentService.merge_buckets(split_items)#await self.item_service.create_item_in_bulk(items_map)
+            print("Customer created", customers_created)
+            print("Item created", items_created)
             # Build payloads for each document.
             # Build payloads for each document.
             for document in documents:
@@ -147,16 +249,19 @@ class DocumentService:
                             f"No items created for document {document.transaction_id}.", "error"
                         )
                         continue
-
+                    # amount = int(item.quantity)*float(item.unit_price or 0)
                     line_items = [{
                         "DetailType": "SalesItemLineDetail",
-                        # "Amount": amount,
+                        "Amount": int(item.quantity)*float(item.unit_price or 0),
                         "Description": item.description if item.description else "",
                         "SalesItemLineDetail": {
                             "ItemRef": {"value": str(item.id)},
                             "Qty": int(item.quantity or 0),
                             "UnitPrice": float(item.unit_price or 0),
-                            "TaxCodeRef": "TAX" if item.tax_code == "TAX" else "NONE"
+                            "TaxCodeRef": {
+                                "value": "TAX" if item.tax_code == "TAX" else "NONE"
+                            },
+
                         }
                     } for item in reference_items]
 
@@ -169,8 +274,11 @@ class DocumentService:
                     valid_customer_id = valid_customer.id
                     doc_number = generate_doc_number(self.doc_number_prefix)
                     payload = {
-                        "Invoices": {
-                            "CustomerRef": {"value": valid_customer_id, "name": valid_customer.name},
+                        self.doc_type: {
+                            "CustomerRef": {"value": valid_customer_id
+                                            # "name": valid_customer.name
+
+                                            },
                             "AutoDocNumber": False,
                             # "EmailStatus": "NotSet",
                             "Line": line_items,
@@ -205,21 +313,26 @@ class DocumentService:
                                     "error")
 
             if document_payload_bulk:
-                bulk_payload = {"Invoices": document_payload_bulk}
-                xero_response = await self.client.request(
-                    xero_token=self.repo.get_integration_token(),
+                bulk_payload = {"BatchItemRequest": document_payload_bulk}
+                pprint(bulk_payload)
+                quickbooks_response = await self.client.request(
+                    quickbooks_token=self.repo.get_integration_token(),
                     payload=bulk_payload,
-                    endpoint="Invoices",
+                    endpoint="batch",
                     method="POST"
                 )
-                if "error" not in xero_response:
+                if "error" not in quickbooks_response:
                     await self.store_records_in_firebase(invoice_records)
-                return xero_response
+                await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)
+
+                return quickbooks_response
 
             return {"error": "No valid documents processed."}
 
         except Exception as e:
             error_msg = f"❌ Error in bulk sending of {self.doc_type} documents: {str(e)}"
+            await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)
+
             await self._log(error_msg, "error")
             return {"error": str(e)}
 
@@ -234,8 +347,7 @@ class DocumentService:
             # Update progress asynchronously.
             for step in range(5):
                 await asyncio.sleep(0.3)
-                self.context.progress[f"creating_{self.doc_type}"] = ((
-                                                                              step + 1) / 5) * IntegrationsProgressLog.CREATING_ITEM_WEIGHT
+                self.context.progress[f"creating_{self.doc_type}"] = ((step + 1) / 5) * IntegrationsProgressLog.CREATING_ITEM_WEIGHT
                 await self.context.progress_logger.safe_emit_progress(share_progress)
 
             if not document.group_id or not document.group_id.strip():
@@ -336,5 +448,7 @@ class DocumentService:
 
         except Exception as e:
             error_msg = f"❌ Failed to create invoice for file {document.transaction_id}: {str(e)}"
+            await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)
+
             await self._log(error_msg, "error")
             return {"error": str(e)}

@@ -1,5 +1,7 @@
 import asyncio
+import json
 import re
+from collections import defaultdict
 from pprint import pprint
 from typing import Optional, Dict, Any, List
 from fastapi.responses import JSONResponse
@@ -36,19 +38,23 @@ class EntityHelper:
         Compares local entities with integration entities and returns
         a list of local entities that don't exist in the integration.
         """
+        # params={"query": f"SELECT * FROM {endpoint}"}
         integration_entities = await self.fetch_all_entities(endpoint, name_field, id_field)
+        # print("All", integration_entities)
+        # pprint( integration_entities)
         integration_ids = {entity.get("Id") for entity in integration_entities}
+
         integration_names = {entity.get("Name") for entity in integration_entities}
+
         non_existing_entities = []
         for entity in local_entities:
             if isinstance(entity, Customer):
                 if entity.name not in integration_names or entity.id not in integration_ids:
                     non_existing_entities.append(entity)
             else:
-                if entity.id not in integration_ids:
+                if entity.name not in integration_names  and entity.id not in integration_ids:
+
                     non_existing_entities.append(entity)
-
-
         return non_existing_entities
 
     async def check_entity_exists(
@@ -137,9 +143,9 @@ class EntityHelper:
         entity_data_list = response.get(expected_response_key, [])
 
         # Fallback for known alternative structure.
-        if not entity_data_list and entity.lower() == "customer" and "Contacts" in response:
-            expected_response_key = "Contacts"
-            expected_id_field = "ContactID"
+        if not entity_data_list and entity.lower() == "customer" and "Customer" in response:
+            expected_response_key = "DisplayName"
+            expected_id_field = "Id"
             entity_data_list = response.get(expected_response_key, [])
 
         if entity_data_list:
@@ -158,10 +164,11 @@ class EntityHelper:
         Returns a list of entity data dictionaries.
         """
         await self._simulate_progress(entity)
+        # print(payload)
 
         response = await self.client.request(
             self.repo.get_integration_token(),
-            entity,  # using singular endpoint for bulk creation as expected by the API
+            "batch",  # using singular endpoint for bulk creation as expected by the API
             payload=payload,
             method="POST",
         )
@@ -178,7 +185,7 @@ class EntityHelper:
             raise Exception(f"Failed to create {entity.lower()}: {error_msgs}")
 
         # Assuming the response returns a list of created entities under the key 'entity'
-        entity_data = response.get(entity)
+        entity_data = response.get("BatchItemResponse")
         if isinstance(entity_data, list):
             return entity_data
         elif isinstance(entity_data, dict):
@@ -186,75 +193,96 @@ class EntityHelper:
         else:
             raise Exception(f"Unexpected response structure: {response}")
 
+    import logging
+    from collections import defaultdict
+    from typing import Any, Dict, List, Optional, Union
+
+    logger = logging.getLogger(__name__)
+
     async def create_entity_in_bulk_and_merge_with_current(
-        self,
-        current_entities: Dict[str, Any],
-        entity: str,
-        payload: Optional[Dict[str, Any]] = None,
-        name_key: str = "Name",
-        id_key: str = "ID",
-        tracker_key: str = "bId"
-    ) -> Dict[str, Any]:
+            self,
+            current_entities: Dict[str, Union[Any, List[Any]]],
+            entity: str,
+            payload: Optional[Dict[str, Any]] = None,
+            name_key: str = "Name",
+            id_key: str = "Id",
+            tracker_key: str = "bId"
+    ) -> Dict[str, Union[Any, List[Any]]]:
         """
-        Creates entities in bulk and merges the created entities with the current local entities.
-        Updates the local entity's ID when the names match.
+        Creates entities in bulk (if payload provided) and merges/updates
+        IDs into `current_entities` based on matching names.
         """
 
-        logger.info(f"Merging current entities: {current_entities}")
-        if len(payload.get(entity)) <= 0:
+        logger.info("Merging current entities for %s: %r", entity, current_entities)
+
+        # If there's nothing to create, just fetch and backfill missing IDs
+        batch = payload.get("BatchItemRequest") if payload else None
+        if not batch:
+            integration = await self.fetch_all_entities(entity, name_key, id_key)
+            # build name → id map
+            name_to_id = {
+                e[name_key]: e[id_key]
+                for e in integration
+                if name_key in e and id_key in e
+            }
+
+            for tracker, items in current_entities.items():
+                # normalize to a list so we handle both single‐object and list cases
+                objs = items if isinstance(items, list) else [items]
+
+                for obj in objs:
+                    if getattr(obj, "id", None) is None:
+                        # now assign to the individual object!
+                        obj.id = name_to_id.get(obj.name)
+
             return current_entities
-        created_entities = await self.create_entity_in_bulk(entity, payload)
-        print(created_entities, "created_entities")
 
-        # updated_entities = await self.create_entity(entity, payload)
-        # Loop over each created entity and update the matching local entity by name.
-        for created_entity in created_entities:
-            if (name_key in created_entity and
-                id_key in created_entity and
-                tracker_key in created_entity):
-                parts = re.split(r'_', created_entity[tracker_key])
+        # 1) create new entities in bulk
+        created = await self.create_entity_in_bulk(entity, payload)
+        logger.info("Bulk-created entities: %r", created)
 
-                tracker = parts[0]
+        # 2) normalize current_entities into tracker_key → [objects] map
+        tracker_map: Dict[str, List[Any]] = defaultdict(list)
+        for tracker, val in current_entities.items():
+            if isinstance(val, list):
+                tracker_map[tracker].extend(val)
+            else:
+                tracker_map[tracker].append(val)
 
-                any_object = current_entities.get(tracker, [])
-
-                # print(any_object, name_key, id_key)
-
-                if isinstance(any_object, list):
-                    for local_entity in any_object:
-                        if local_entity.name == created_entity.get(name_key) and (local_entity.id is None or local_entity.id == ''):
-                            local_entity.name = created_entity.get(name_key)
-                            if isinstance(local_entity, Item):
-                                local_entity.sku = created_entity.get("Code")
-
-                            local_entity.id = created_entity.get(id_key)
-                            break
-                else:
-                    if any_object.name == created_entity.get(name_key) and (any_object.id is None or any_object.id ==''):
-                        any_object.name = created_entity.get(name_key)
-                        print(id_key)
-                        any_object.id = created_entity.get(id_key)
-        # print("jjfjf", current_entities)
+        # 3) merge created back into locals
+        for e in created:
+            if all(k in e for k in (tracker_key, name_key, id_key)):
+                tracker = e[tracker_key].split("_", 1)[0]
+                for local in tracker_map.get(tracker, []):
+                    if local.name == e[name_key] and not getattr(local, "id", None):
+                        local.name = e[name_key]
+                        local.id = e[id_key]
+                        # if this type has an sku field, set it too
+                        if hasattr(local, "sku"):
+                            local.sku = e[tracker_key]
+                        break
 
         return current_entities
 
     async def fetch_all_entities(
-        self, endpoint: str, name_field: str = "Name", id_field: str = "Id", where_clause: Optional[Dict[str, str]] = None
+        self, endpoint: str, name_field: str = "Name", id_field: str = "Id", params: Optional[Dict[str, str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Fetches all entities from QuickBooks. If a where_clause is provided, it is added to the GET request.
         """
-        params = {}
-        if where_clause:
-            params["where"] = where_clause
+
 
         response = await self.client.request(
             self.repo.get_integration_token(),
-            endpoint,
+            "query",
             method="GET",
-            params=params,
+            params = {"query": f"SELECT * FROM {endpoint} STARTPOSITION 1 MAXRESULTS 1000"},
         )
-        entities = response.get(endpoint, [])
+        # pprint(response)
+        entities = response["QueryResponse"].get(endpoint, [])
+        # pprint(entities)
+        # print(json.dumps(response, indent=2, sort_keys=True))
+
         return [{"Name": entity.get(name_field), "Id": entity.get(id_field)} for entity in entities]
 
     async def get_all_entities(

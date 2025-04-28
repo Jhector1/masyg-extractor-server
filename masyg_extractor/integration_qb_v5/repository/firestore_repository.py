@@ -13,6 +13,7 @@ class FirestoreRepository:
     """
 
     def __init__(self, user_id: str, integration: str):
+
         if not user_id:
             raise ValueError("user_id is required.")
         if not integration:
