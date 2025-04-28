@@ -40,16 +40,18 @@ class EntityHelper:
         """
         # params={"query": f"SELECT * FROM {endpoint}"}
         integration_entities = await self.fetch_all_entities(endpoint, name_field, id_field)
-        # print("All", integration_entities)
+
         # pprint( integration_entities)
         integration_ids = {entity.get("Id") for entity in integration_entities}
 
         integration_names = {entity.get("Name") for entity in integration_entities}
 
         non_existing_entities = []
+
+
         for entity in local_entities:
             if isinstance(entity, Customer):
-                if entity.name not in integration_names or entity.id not in integration_ids:
+                if entity.name not in integration_names and entity.id not in integration_ids:
                     non_existing_entities.append(entity)
             else:
                 if entity.name not in integration_names  and entity.id not in integration_ids:
@@ -218,23 +220,28 @@ class EntityHelper:
         # If there's nothing to create, just fetch and backfill missing IDs
         batch = payload.get("BatchItemRequest") if payload else None
         if not batch:
+
             integration = await self.fetch_all_entities(entity, name_key, id_key)
+
             # build name → id map
             name_to_id = {
-                e[name_key]: e[id_key]
+                e["Name"]: e["Id"]
                 for e in integration
-                if name_key in e and id_key in e
+                if "Name" in e and "Id" in e
             }
+            print(f"name to id -{entity} ", name_to_id)
 
             for tracker, items in current_entities.items():
                 # normalize to a list so we handle both single‐object and list cases
                 objs = items if isinstance(items, list) else [items]
+                print(entity,tracker, objs)
 
                 for obj in objs:
                     if getattr(obj, "id", None) is None:
                         # now assign to the individual object!
                         obj.id = name_to_id.get(obj.name)
 
+            print(f"cuurent {entity}",current_entities)
             return current_entities
 
         # 1) create new entities in bulk

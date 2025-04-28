@@ -184,7 +184,7 @@ class CustomerService:
                 List[Customer],
                 await self.entity_helper.get_non_existing_entities(customer_list, entity, name_key, id_key)
             )
-            print(non_existing_customers)
+            print("non-exist",non_existing_customers)
 
 
 

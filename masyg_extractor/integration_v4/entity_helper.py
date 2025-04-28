@@ -235,7 +235,7 @@ class EntityHelper:
                         any_object.name = created_entity.get(name_key)
                         print(id_key)
                         any_object.id = created_entity.get(id_key)
-        # print("jjfjf", current_entities)
+        print("jjfnbnnbjf-created", current_entities)
 
         return current_entities
 

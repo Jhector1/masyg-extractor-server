@@ -25,7 +25,7 @@ def create_customer(details: Dict[str, Any], transaction_id) -> Customer:
     Create a Customer object from the details dictionary.
     """
     return Customer(
-        id=details.get("customer_id"),
+        id=details.get("customer_id") if details.get("customer_id") else None,
         name=remove_non_alphanumeric(details.get("customer_name")),
         transaction_id=transaction_id
     )

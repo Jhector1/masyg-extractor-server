@@ -55,7 +55,7 @@ class DocumentService:
                 logger.info(message)
             await self.context.log_manager.send_log(
                 message,
-                log_key= "invoice-log-message",#f"{self.doc_type.lower()}-log-message",
+                log_key="invoice-log-message",  # f"{self.doc_type.lower()}-log-message",
                 user_room=self.context.client_id
             )
         except Exception as e:
@@ -175,6 +175,7 @@ class DocumentService:
                     else:
                         merged[key] = [existing, items]
         return merged
+
     async def send_document_in_bulk(self, documents: List[Document], share_progress: float) -> Dict[str, Any]:
         """
         Processes a list of documents in bulk:
@@ -186,7 +187,7 @@ class DocumentService:
         """
         try:
             document_payload_bulk = []
-            invoice_records = []
+            invoice_records = {}
             customers_map, items_map = {}, {}
             existing_documents = 0
 
@@ -211,8 +212,6 @@ class DocumentService:
                 customers_map[key] = document.customer
                 items_map[key] = document.items
 
-
-
             if len(customers_map) == existing_documents:
                 raise Exception("No new documents to process.")
 
@@ -220,21 +219,20 @@ class DocumentService:
             split_customers = []
             split_items = []
 
-            print("Customer map", customers_map)
-            print("Item map", items_map)
 
             customers_normalized = DocumentService.split_array_(customers_map, 30)
             items_normalized = DocumentService.split_array_(items_map, 30)
 
-            print("Customer normalized", customers_normalized)
-            print("Item normalized", items_normalized)
+
             for customers in customers_normalized:
+
                 split_customers.append(await self.customer_service.create_customer_in_bulk(customers))
             for items in items_normalized:
                 split_items.append(await self.item_service.create_item_in_bulk(items))
 
             customers_created = DocumentService.merge_buckets(split_customers)
-            items_created =  DocumentService.merge_buckets(split_items)#await self.item_service.create_item_in_bulk(items_map)
+            items_created = DocumentService.merge_buckets(
+                split_items)  # await self.item_service.create_item_in_bulk(items_map)
             print("Customer created", customers_created)
             print("Item created", items_created)
             # Build payloads for each document.
@@ -252,20 +250,20 @@ class DocumentService:
                     # amount = int(item.quantity)*float(item.unit_price or 0)
                     line_items = [{
                         "DetailType": "SalesItemLineDetail",
-                        "Amount": int(item.quantity)*float(item.unit_price or 0),
+                        "Amount": int(item.quantity) * float(item.unit_price or 0),
                         "Description": item.description if item.description else "",
                         "SalesItemLineDetail": {
                             "ItemRef": {"value": str(item.id)},
                             "Qty": int(item.quantity or 0),
                             "UnitPrice": float(item.unit_price or 0),
                             "TaxCodeRef": {
-                                "value": "TAX" if item.tax_code == "TAX" else "NONE"
+                                "value": "TAX" if item.tax_code == "TAX" else "NON"
                             },
 
                         }
                     } for item in reference_items]
 
-                    valid_customer = customers_created.get(key) or []
+                    valid_customer = customers_created.get(key) or None
                     if not valid_customer:
                         await self._log(
                             f"Customer creation failed for document {document.transaction_id}.", "error"
@@ -273,6 +271,7 @@ class DocumentService:
                         continue
                     valid_customer_id = valid_customer.id
                     doc_number = generate_doc_number(self.doc_number_prefix)
+                    bid = generate_sku(document.transaction_id)
                     payload = {
                         self.doc_type: {
                             "CustomerRef": {"value": valid_customer_id
@@ -289,11 +288,11 @@ class DocumentService:
                             "DocNumber": doc_number
                         },
                         "operation": "create",
-                        "bId": generate_sku(document.transaction_id),
+                        "bId": bid,
                     }
                     document_payload_bulk.append(payload)
 
-                    invoice_record = {
+                    invoice_record =  {
                         "group_id": document.group_id,
                         "transactionId": document.transaction_id,
                         "integration": "quickbooks",
@@ -301,13 +300,13 @@ class DocumentService:
                         "docNumber": doc_number,
                         "customerId": valid_customer_id,
                         "date": document.date,
+                        "bId": bid,
                         "amount": sum(
                             float(item.quantity or 0) * float(item.unit_price or 0) for item in document.items),
                         "metadata": {"syncToken": "0"}
                     }
-                    invoice_records.append(invoice_record)
-                    await self._log(
-                        f"✅ {self.doc_type.capitalize()} processed for {document.customer.name} successfully")
+                    invoice_records[bid]=invoice_record
+
                 except Exception as e:
                     await self._log(f"❌ Failed to process invoice for file {document.transaction_id}: {str(e)}",
                                     "error")
@@ -321,8 +320,26 @@ class DocumentService:
                     endpoint="batch",
                     method="POST"
                 )
-                if "error" not in quickbooks_response:
-                    await self.store_records_in_firebase(invoice_records)
+                pprint(quickbooks_response)
+                response_payload = quickbooks_response.get("BatchItemResponse", {})
+                firestore_records=[]
+                for payload in response_payload:
+                    bid = payload.get("bId")
+                    invoice_record= invoice_records.get(bid)
+                    file = get_original_filename(invoice_record.get('transactionId'))
+                    if 'Fault' in payload:
+                        error_msg = f"❌ Failed to create {invoice_record.get('transactionType')} - document: {file}"
+                        await self._log(error_msg, "error")
+                    else:
+                        await self._log(
+                            f"✅ {self.doc_type.capitalize()} processed  successfully - document: {file}")
+                        firestore_records.append(invoice_record)
+
+
+
+                if len(firestore_records) > 0:
+
+                    await self.store_records_in_firebase(firestore_records)
                 await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)
 
                 return quickbooks_response
@@ -347,7 +364,8 @@ class DocumentService:
             # Update progress asynchronously.
             for step in range(5):
                 await asyncio.sleep(0.3)
-                self.context.progress[f"creating_{self.doc_type}"] = ((step + 1) / 5) * IntegrationsProgressLog.CREATING_ITEM_WEIGHT
+                self.context.progress[f"creating_{self.doc_type}"] = ((
+                                                                                  step + 1) / 5) * IntegrationsProgressLog.CREATING_ITEM_WEIGHT
                 await self.context.progress_logger.safe_emit_progress(share_progress)
 
             if not document.group_id or not document.group_id.strip():
