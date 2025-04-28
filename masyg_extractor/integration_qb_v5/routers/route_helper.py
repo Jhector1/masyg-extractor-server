@@ -7,6 +7,7 @@ from masyg_extractor.integration_qb_v5.core.integration_context import Integrati
 from masyg_extractor.integration_qb_v5.domain.models import *
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.adapter import QuickBooksClientAdapter
 from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integration_qb_v5.utils import parse_int, parse_float
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.xero.services.item_services import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
@@ -40,8 +41,8 @@ def create_item(line_item: Dict[str, Any], transaction_id) -> Item:
     return Item(
         id=line_item.get("item_id"),
         name=name,
-        quantity=int(line_item.get("quantity")),
-        unit_price=float(line_item.get("unit_price")),
+        quantity=parse_int(line_item.get("quantity")),
+        unit_price=parse_float(line_item.get("unit_price")),
         description=line_item.get("description"),
         income_account=Account(
             id=line_item.get("income_account_id"),

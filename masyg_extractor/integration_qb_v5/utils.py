@@ -23,3 +23,19 @@ def extract_uuid(file_string: str) -> str:
     if match:
         return match.group("uuid")
     raise ValueError("UUID not found in input string")
+
+def parse_int(value: str) -> int:
+    # Strip out anything that isn't a digit or minus sign
+    cleaned = re.sub(r"[^\d\-]", "", value or "")
+    return int(cleaned)
+
+def parse_float(value: str) -> float:
+    """
+    Strip out anything except digits, decimal point, and minus sign,
+    then convert to float.
+    """
+    if not value:
+        raise ValueError("No value provided")
+    # Remove all characters except digits, dot, and minus
+    cleaned = re.sub(r"[^\d\.\-]", "", value)
+    return float(cleaned)
