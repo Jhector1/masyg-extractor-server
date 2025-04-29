@@ -199,7 +199,7 @@ class DocumentService:
 
                 if await self._record_exists(document.group_id, document.transaction_id):
                     dup_msg = (f"{self.doc_type} for ({get_original_filename(document.transaction_id)}) "
-                               "already recorded in Xero.")
+                               f"already recorded in {self.repo.integration}.")
                     await self._log(f"❌ {dup_msg}", "error")
                     existing_documents += 1
                     continue
@@ -364,15 +364,14 @@ class DocumentService:
             # Update progress asynchronously.
             for step in range(5):
                 await asyncio.sleep(0.3)
-                self.context.progress[f"creating_{self.doc_type}"] = ((
-                                                                                  step + 1) / 5) * IntegrationsProgressLog.CREATING_ITEM_WEIGHT
+                self.context.progress[f"creating_{self.doc_type}"] = ((step + 1) / 5) * IntegrationsProgressLog.CREATING_ITEM_WEIGHT
                 await self.context.progress_logger.safe_emit_progress(share_progress)
 
             if not document.group_id or not document.group_id.strip():
                 return {"error": "Group ID is required for invoice creation."}
 
             if await self._record_exists(document.group_id, document.transaction_id):
-                msg = f"{self.doc_type} for ({get_original_filename(document.transaction_id)}) already recorded in Xero."
+                msg = f"{self.doc_type} for ({get_original_filename(document.transaction_id)}) already recorded in ${self.repo.integration}."
                 await asyncio.sleep(1)
                 await self.context.log_manager.send_log(
                     f"❌ {msg}",
