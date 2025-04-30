@@ -1,27 +1,19 @@
 import asyncio
-from itertools import chain
+from pprint import pprint
 from typing import List, Dict, Any
-from fastapi import Request
 
 from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
-from masyg_extractor.integration_v4.domain.models import Item, Customer, Invoice, Document
+from masyg_extractor.integration_v4.domain.models import Document
 from masyg_extractor.integration_v4.entity_helper import EntityHelper
 from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationClientAdapter
-from masyg_extractor.integration_v4.intergrate.quickbooks.services.item_service import ItemService
+from masyg_extractor.integration_v4.intergrate.xero.services.item_service import ItemService
 from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integration_v4.utils import extract_uuid
 from masyg_extractor.integrations.utils import format_date
-from masyg_extractor.integrations.xero.xero_router import get_items
 from masyg_extractor.services.log_manager import LogManager
-from masyg_extractor.services.my_log import logger, send_log
-from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
-from masyg_extractor.integrations.quickbooks.repository.firestore_repository import (
-    store_invoice_record,
-    invoice_exists_in_firestore
-)
-from masyg_extractor.integration_v4.intergrate.quickbooks.services.customer_service import CustomerService
-from masyg_extractor.integrations.quickbooks.services.item_service import check_item_exists, create_item
-from masyg_extractor.integrations.transaction_helpers import generate_doc_number, check_duplicate_record
+from masyg_extractor.services.my_log import logger
+from masyg_extractor.integration_v4.intergrate.xero.services.customer_service import CustomerService
+from masyg_extractor.integrations.transaction_helpers import generate_doc_number
 from masyg_extractor.services.progress_log import IntegrationsProgressLog
 from masyg_extractor.utils.extensions import sio
 from masyg_extractor.utils.tool import get_original_filename
@@ -100,6 +92,7 @@ class DocumentService:
           - Sends invoices via the integration client.
           - Stores the processed invoice records in Firebase.
         """
+        print(len(documents), documents)
         try:
             document_payload_bulk = []
             invoice_records = []
@@ -107,7 +100,9 @@ class DocumentService:
             existing_documents = 0
 
             # Process each document.
+            count=1
             for document in documents:
+                count += 1
                 if not document.group_id or not document.group_id.strip():
                     await self._log("Group ID is required for invoice creation.", "error")
                     continue
@@ -127,7 +122,9 @@ class DocumentService:
                 customers_map[key] = document.customer
                 items_map[key] = document.items
 
-            if len(customers_map) == existing_documents:
+
+            if len(documents) == existing_documents:
+
                 raise Exception("No new documents to process.")
 
             # Create customers and items in bulk.
@@ -198,13 +195,16 @@ class DocumentService:
 
             if document_payload_bulk:
                 bulk_payload = {"Invoices": document_payload_bulk}
+                pprint(bulk_payload)
                 xero_response = await self.client.request(
                     xero_token=self.repo.get_integration_token(),
                     payload=bulk_payload,
                     endpoint="Invoices",
                     method="POST"
                 )
+                pprint(xero_response)
                 if "error" not in xero_response:
+                    pass
                     await self.store_records_in_firebase(invoice_records)
                 return xero_response
 

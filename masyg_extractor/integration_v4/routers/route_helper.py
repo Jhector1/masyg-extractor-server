@@ -1,11 +1,11 @@
 import asyncio
-from typing import Any, Dict, List, Union
-from fastapi import APIRouter, Request, HTTPException, status, Depends
+from typing import Union
+from fastapi import Request
 
 from masyg_extractor.global_helper import transform_value
 from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
 from masyg_extractor.integration_v4.domain.models import *
-from masyg_extractor.integration_v4.intergrate.quickbooks.adapter import XeroClientAdapter
+from masyg_extractor.integration_v4.intergrate.xero.adapter import XeroClientAdapter
 from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.xero.services.item_services import generate_sku

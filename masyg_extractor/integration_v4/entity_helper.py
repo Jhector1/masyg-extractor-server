@@ -42,8 +42,13 @@ class EntityHelper:
         non_existing_entities = []
         for entity in local_entities:
             if isinstance(entity, Customer):
-                if entity.name not in integration_names or entity.id not in integration_ids:
+
+                if entity.id is not None and entity.id not in integration_ids:
                     non_existing_entities.append(entity)
+
+                else:
+                    if entity.name not in integration_names:
+                        non_existing_entities.append(entity)
             else:
                 if entity.id not in integration_ids:
                     non_existing_entities.append(entity)
@@ -96,7 +101,7 @@ class EntityHelper:
         """
         Simulates progress for a given task by updating progress logs.
         """
-        print(f"creating_{task.lower()}")
+
         for step in range(steps):
             await asyncio.sleep(0.3)
             self.context.progress[f"creating_{task.lower()}"] = ((step + 1) / steps) * self.context.progress_logger.getWeight(f"creating_{task.lower()}")
@@ -205,7 +210,7 @@ class EntityHelper:
         if len(payload.get(entity)) <= 0:
             return current_entities
         created_entities = await self.create_entity_in_bulk(entity, payload)
-        print(created_entities, "created_entities")
+
 
         # updated_entities = await self.create_entity(entity, payload)
         # Loop over each created entity and update the matching local entity by name.
@@ -233,9 +238,8 @@ class EntityHelper:
                 else:
                     if any_object.name == created_entity.get(name_key) and (any_object.id is None or any_object.id ==''):
                         any_object.name = created_entity.get(name_key)
-                        print(id_key)
+
                         any_object.id = created_entity.get(id_key)
-        print("jjfnbnnbjf-created", current_entities)
 
         return current_entities
 

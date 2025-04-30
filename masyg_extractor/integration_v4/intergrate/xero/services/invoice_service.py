@@ -1,26 +1,13 @@
-import asyncio
-from typing import List, Dict, Any, Optional
-from fastapi import Request
+from typing import List, Dict, Any
 
 from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
-from masyg_extractor.integration_v4.domain.models import Item, Customer, Invoice
+from masyg_extractor.integration_v4.domain.models import Invoice
 from masyg_extractor.integration_v4.entity_helper import EntityHelper
 from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationClientAdapter
-from masyg_extractor.integration_v4.intergrate.quickbooks.services.document_service import DocumentService
-from masyg_extractor.integration_v4.intergrate.quickbooks.services.item_service import ItemService
+from masyg_extractor.integration_v4.intergrate.xero.services.document_service import DocumentService
+from masyg_extractor.integration_v4.intergrate.xero.services.item_service import ItemService
 from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
-from masyg_extractor.services.my_log import logger, send_log
-from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
-from masyg_extractor.integrations.quickbooks.repository.firestore_repository import (
-    store_invoice_record,
-    invoice_exists_in_firestore
-)
-from masyg_extractor.integration_v4.intergrate.quickbooks.services.customer_service import CustomerService
-
-from masyg_extractor.integrations.quickbooks.services.item_service import check_item_exists, create_item
-from masyg_extractor.integrations.transaction_helpers import generate_doc_number, check_duplicate_record
-from masyg_extractor.services.progress_log import IntegrationsProgressLog
-from masyg_extractor.utils.tool import get_original_filename
+from masyg_extractor.integration_v4.intergrate.xero.services.customer_service import CustomerService
 
 
 class InvoiceService(DocumentService):

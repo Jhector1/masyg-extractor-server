@@ -229,7 +229,6 @@ class EntityHelper:
                 for e in integration
                 if "Name" in e and "Id" in e
             }
-            print(f"name to id -{entity} ", name_to_id)
 
             for tracker, items in current_entities.items():
                 # normalize to a list so we handle both single‐object and list cases
@@ -241,7 +240,6 @@ class EntityHelper:
                         # now assign to the individual object!
                         obj.id = name_to_id.get(obj.name)
 
-            print(f"cuurent {entity}",current_entities)
             return current_entities
 
         # 1) create new entities in bulk

@@ -185,6 +185,7 @@ class DocumentService:
           - Sends invoices via the integration client.
           - Stores the processed invoice records in Firebase.
         """
+
         try:
             document_payload_bulk = []
             invoice_records = {}
@@ -212,7 +213,7 @@ class DocumentService:
                 customers_map[key] = document.customer
                 items_map[key] = document.items
 
-            if len(customers_map) == existing_documents:
+            if len(documents) == existing_documents:
                 raise Exception("No new documents to process.")
 
             # Create customers and items in bulk.
@@ -233,8 +234,8 @@ class DocumentService:
             customers_created = DocumentService.merge_buckets(split_customers)
             items_created = DocumentService.merge_buckets(
                 split_items)  # await self.item_service.create_item_in_bulk(items_map)
-            print("Customer created", customers_created)
-            print("Item created", items_created)
+            # print("Customer created", customers_created)
+            # print("Item created", items_created)
             # Build payloads for each document.
             # Build payloads for each document.
             for document in documents:
