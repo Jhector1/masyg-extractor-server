@@ -188,7 +188,7 @@ class AuthHelper:
                     id_token=token_data.get(self.extra_param)  # or token_data.get("id_token")
                 )
 
-            return JSONResponse({"message": "Token refreshed successfully.", "access_token": new_access_token})
+            return JSONResponse({"message": "Token refreshed successfully.", "access_token": "new_access_token"})
         else:
             error = response_data.get("error")
             if error == "invalid_grant":

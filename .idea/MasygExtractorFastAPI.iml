@@ -3,6 +3,8 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/masyg_extractor/integration_v2" />
+      <excludeFolder url="file://$MODULE_DIR$/masyg_extractor/integration_v3" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.12 (MasygExtractorFastAPI)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

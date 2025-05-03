@@ -4,6 +4,7 @@
 import asyncio
 import json
 import os
+from pprint import pprint
 from typing import Optional, Dict, Any
 
 import httpx
@@ -63,6 +64,9 @@ class XeroClientAdapter(IntegrationClientAdapter):
                 else:
                     raise Exception(f"Unsupported HTTP method: {method}")
                 # print(response)
+                if endpoint=="Invoices":
+                    pprint({"xero-res":response})
+
                 response.raise_for_status()
                 response_json = response.json()
                 logger.info(f"Xero API Response: {response.status_code}")

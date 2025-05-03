@@ -112,7 +112,11 @@ class DefaultCookieMiddleware(BaseHTTPMiddleware):
 # Create FastAPI app.
 app = FastAPI()
 secret_key = os.getenv('SECRET_KEY', 'BAD_SECRET_KEY')
+
+
 init_mail(app)
+
+
 if ENV == "production":
 
     # Starlette’s SessionMiddleware uses a cookie-based session.
@@ -151,7 +155,7 @@ else:
     app.add_middleware(SessionMiddleware, secret_key=secret_key)
 
     # Load development configuration if needed.
-    pass
+    # pass
 
 # Set up CORS.
 origins = [os.getenv('CLIENT_URL'), "http://localhost:3000"]
@@ -163,7 +167,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# For caching you could integrate a FastAPI caching library.
+# init_mail For caching you could integrate a FastAPI caching library.
 # For now, this code omits a direct caching equivalent.
 
 # Talisman equivalent: You may want to add custom middleware or use libraries
@@ -204,20 +208,26 @@ db = firestore.client()
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 def expire_free_trials():
+    # 30 days ago (UTC)
     cutoff = datetime.utcnow() - timedelta(days=30)
-    cutoff_ts = firestore.Timestamp.from_datetime(cutoff)
 
-    # Loop through all users (you could optimize via batch / pagination)
+    # Loop all users (you can optimize this with a query)
     for user_snap in db.collection("users").stream():
         uid = user_snap.id
-        trial_ref = db.collection("users").document(uid) \
-                     .collection("plan").document("trial")
+        trial_ref = (
+            db.collection("users")
+              .document(uid)
+              .collection("plan")
+              .document("trial")
+        )
         trial_snap = trial_ref.get()
         if not trial_snap.exists:
             continue
 
         trial = trial_snap.to_dict()
-        if trial.get("hasUsed") and trial["date"] <= cutoff_ts:
+        # trial["date"] is a Firestore Timestamp in the DB,
+        # but comparing it to a Python datetime works out of the box.
+        if trial.get("hasUsed") and trial.get("date") <= cutoff:
             # 1) flip isSubscribed off
             db.collection("users").document(uid).update({
                 "isSubscribed": False
@@ -225,7 +235,8 @@ def expire_free_trials():
             # 2) optional: delete or mark the trial doc
             # trial_ref.delete()
 
-    print("✅ Expired any >30‑day trials.")
+    print("✅ Expired any >30-day trials.")
+
 
 # 3) Wire up APScheduler in the startup event
 @app.on_event("startup")

@@ -251,11 +251,11 @@ async def send_invoice_bulk_route(
                                        repo=repo,client=xero_client)
     clean_data = await normalize_payload(data, "invoice_data")
 
-    return await document_service.send_document_in_bulk(clean_data,    await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(global_progress),'ACCPAY', )
+    return await document_service.send_document_in_bulk(clean_data,    await progress_logger.safe_emit_progress(progress_logger.calculate_overall_progress(global_progress)),invoice_status='ACCPAY'
  )
 
 
-
+#pprint
 @router.get("/income-accounts")
 async def get_income_accounts(
     request: Request,
