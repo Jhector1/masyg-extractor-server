@@ -220,6 +220,7 @@ def expire_free_trials():
               .collection("plan")
               .document("trial")
         )
+        # redis
         trial_snap = trial_ref.get()
         if not trial_snap.exists:
             continue

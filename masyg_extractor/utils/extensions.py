@@ -18,7 +18,7 @@ if ENV == "production":
     redis_url = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379')
     print(f"[INFO] Production environment detected. Connecting to Redis at {redis_url}.")
     try:
-        redis_conn = redis.from_url(redis_url)
+        redis_conn = redis.from_url(redis_url,  ssl=redis_url.startswith("redis://"))
         redis_conn.ping()  # Test the Redis connection
         print("[SUCCESS] Connected to Redis successfully.")
     except redis.ConnectionError as e:

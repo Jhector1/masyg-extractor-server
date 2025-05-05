@@ -6,3 +6,4 @@
   "targets": {},
   "etags": {}
 }
+tf_keras==2.19.0
