@@ -42,6 +42,14 @@ from masyg_extractor.utils.extensions import sio
 load_dotenv(find_dotenv())
 
 print("Environment:", ENV)
+import psutil
+def log_mem(step):
+    proc = psutil.Process(os.getpid())
+    print(f"MEMORY @ {step}: {(proc.memory_info().rss/1e6):.1f} MB")
+
+# after each init
+log_mem("firebase init")
+
 
 # Initialize Firebase early.
 from masyg_extractor.firebase.firebase_init import firebase_init
@@ -253,13 +261,6 @@ def start_scheduler():
 
 
 
-import psutil
-def log_mem(step):
-    proc = psutil.Process(os.getpid())
-    print(f"MEMORY @ {step}: {(proc.memory_info().rss/1e6):.1f} MB")
-
-# after each init
-log_mem("firebase init")
 
 import socketio
 
