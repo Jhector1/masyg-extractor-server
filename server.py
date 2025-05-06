@@ -253,6 +253,13 @@ def start_scheduler():
 
 
 
+import psutil
+def log_mem(step):
+    proc = psutil.Process(os.getpid())
+    print(f"MEMORY @ {step}: {(proc.memory_info().rss/1e6):.1f} MB")
+
+# after each init
+log_mem("firebase init")
 
 import socketio
 
