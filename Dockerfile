@@ -1,7 +1,9 @@
-# 1) Builder stage: compile wheels only
+############################
+# 1) Builder: compile wheels
+############################
 FROM python:3.12-slim AS builder
 
-# Install build tools + heavy libs only for wheel compilation
+# Install build tools + heavy libs for wheel compilation
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential \
@@ -11,16 +13,21 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /wheels
+
+# Copy only requirements
 COPY requirements.txt ./
 
-# Build wheel packages for all dependencies
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt
+# Build wheels for all dependencies *and* the spaCy model wheel
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt \
+ && pip wheel --no-cache-dir --wheel-dir=/wheels en-core-web-sm==3.8.0
 
 
-# 2) Final stage: minimal runtime
+#########################
+# 2) Final: minimal image
+#########################
 FROM python:3.12-slim
 
-# Install only runtime system dependencies
+# Install only runtime system libraries
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       poppler-utils \
@@ -28,28 +35,23 @@ RUN apt-get update \
       ghostscript \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy in pre-built wheels and install them
+# Copy in pre-built wheels and install them (no pip cache!)
 COPY --from=builder /wheels /wheels
 RUN pip install --no-index --no-cache-dir /wheels/*.whl
 
-# App directory
+# App code
 WORKDIR /app
 COPY . /app
 
-# Environment
+# Env
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Expose your port
+# Expose port
 EXPOSE 5000
 
-# At container start:
-# 1) Download spaCy model into a writable folder (/app/models)
-# 2) Launch Uvicorn
-ENTRYPOINT [ "sh", "-c", "\
-    python -m spacy download en_core_web_sm --target /app/models && \
-    uvicorn server:app --host 0.0.0.0 --port ${PORT:-5000}" ]
-
+# Launch Uvicorn directly (model already installed)
+ENTRYPOINT ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "${PORT:-5000}"]
 
 
 
