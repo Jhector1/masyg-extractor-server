@@ -17,9 +17,17 @@ WORKDIR /wheels
 # Copy only requirements
 COPY requirements.txt ./
 
-# Build wheels for all dependencies *and* the spaCy model wheel
+# 1a) Build wheels for all your PyPI deps
+# 1b) Fetch the spaCy model wheel directly from GitHub Releases
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt \
- && pip wheel --no-cache-dir --wheel-dir=/wheels en-core-web-sm==3.8.0
+ && pip wheel --no-cache-dir --wheel-dir=/wheels \
+      https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Note: we’re pulling the model wheel straight from the spaCy Models repo,
+# per the “manual download and installation” recommendation :contentReference[oaicite:0]{index=0}
+# and the fact that model wheels live as GitHub releases :contentReference[oaicite:1]{index=1}.
+# ───────────────────────────────────────────────────────────────────────────────
 
 
 #########################
@@ -27,7 +35,7 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt \
 #########################
 FROM python:3.12-slim
 
-# Install only runtime system libraries
+# Only runtime OS libs
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       poppler-utils \
@@ -35,23 +43,23 @@ RUN apt-get update \
       ghostscript \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy in pre-built wheels and install them (no pip cache!)
+# Install all the wheels we built (no pip cache or build tools!)
 COPY --from=builder /wheels /wheels
 RUN pip install --no-index --no-cache-dir /wheels/*.whl
 
-# App code
+# Copy your app
 WORKDIR /app
 COPY . /app
 
-# Env
+# Env vars
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 # Expose port
 EXPOSE 5000
 
-# Launch Uvicorn directly (model already installed)
-ENTRYPOINT ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "${PORT:-5000}"]
+# Directly launch Uvicorn (the model is already installed)
+ENTRYPOINT ["uvicorn","server:app","--host","0.0.0.0","--port","${PORT:-5000}"]
 
 
 
