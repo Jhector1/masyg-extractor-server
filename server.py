@@ -17,15 +17,15 @@ ENV = os.getenv("FAST_API_ENV", "development").lower()
 import logging
 import uuid
 import logging
-if ENV != "development":
-    logging.getLogger("uvicorn").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("socketio.server").setLevel(logging.WARNING)
-    logging.getLogger("engineio.server").setLevel(logging.WARNING)
-    # For HTTP client libraries (like httpx):
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-
+# if ENV != "development":
+#     logging.getLogger("uvicorn").setLevel(logging.WARNING)
+#     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+#     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+#     logging.getLogger("socketio.server").setLevel(logging.WARNING)
+#     logging.getLogger("engineio.server").setLevel(logging.WARNING)
+#     # For HTTP client libraries (like httpx):
+#     logging.getLogger("httpx").setLevel(logging.WARNING)
+print(os.getenv("SERVER_URL"))
 import stripe
 import asyncio
 
