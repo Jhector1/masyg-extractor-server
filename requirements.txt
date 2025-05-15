@@ -1,8 +1,7 @@
 aiofiles==24.1.0
 boto3==1.35.98
-camelot_py==1.0.0
 cryptography==44.0.2
-fastapi==0.100.0              # Upgraded FastAPI supporting Pydantic v2
+fastapi==0.100.0
 firebase_admin==6.7.0
 numpy==1.26.1
 PyMuPDF==1.25.4
@@ -10,14 +9,11 @@ ftfy==6.3.1
 httpx==0.28.1
 openai==0.28.0
 pandas==2.2.3
-torch==2.2.2
-torchaudio==2.2.2
-torchvision==0.17.2
 tornado==6.4.2
 pdf2image==1.17.0
 Pillow==11.1.0
 protobuf==3.20.3
-pydantic==2.10.6              # Pydantic b v2 for FastAPI v0.100.0
+pydantic==2.10.6
 google-cloud-vision==3.10.0
 pydantic-settings==2.8.1
 PyPDF2==3.0.1
@@ -27,19 +23,17 @@ python-dotenv==1.0.1
 python-socketio==5.12.1
 redis==5.2.0
 reportlab==4.3.1
-Requests==2.32.3
+requests==2.32.3
 spacy==3.8.4
-starlette==0.27.0             # Compatible with fastapi==0.100.0
+starlette==0.27.0
 stripe==11.3.0
-transformers==4.46.3
 uvicorn==0.34.0
 Werkzeug==3.1.3
-blinker==1.5                 # Required by fastapi-mail
+blinker==1.5
 fastapi-mail==1.4.2
-google-api-core[grpc]==1.34.1  # Constraint to resolve dependency conflict
+google-api-core[grpc]==1.34.1
 itsdangerous==2.2.0
 python-multipart==0.0.5
-
 python-jose==3.4.0
 apscheduler==3.11.0
 psutil==7.0.0
