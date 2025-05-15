@@ -5,7 +5,7 @@ from typing import Dict, Any
 import fitz
 import httpx
 import spacy
-from transformers import pipeline
+# from transformers import pipeline
 import openai
 
 # import pdfplumber
@@ -32,7 +32,7 @@ from masyg_extractor.utils.tool import clean_text
 logging.basicConfig(level=logging.INFO)
 
 # Load the NLP pipeline for summarization (if needed)
-keyword_extractor = pipeline("summarization", model="facebook/bart-large-cnn")
+# keyword_extractor = pipeline("summarization", model="facebook/bart-large-cnn")
 
 # Set your OpenAI API key from environment variable
 openai.api_key = api_key = os.environ.get("FILE_EXTRACTOR_API_KEY")
@@ -218,43 +218,43 @@ def extract_text_from_pdf(file):
 
 
 
-def extract_text_from_pdf_camelot(file):
-    """
-    Extract tables from a PDF file uploaded via request.files using Camelot.
-
-    :param file: A file-like object from FAST_API `request.files`.
-    :return: Extracted table text as a single string or a message indicating no tables found.
-    """
-    try:
-        # Save the uploaded file to a temporary location
-        filename = secure_filename(file.filename)
-        temp_file_path = os.path.join("/tmp", filename)
-        file.save(temp_file_path)
-
-        # Extract tables from the PDF
-        tables = camelot.read_pdf(temp_file_path, pages="all")
-
-        # Remove the temporary file
-        os.remove(temp_file_path)
-
-        # Check if tables were extracted
-        if not tables or len(tables) == 0:
-            logging.warning(f"No tables found in PDF: {file.filename}")
-            return "No tables found."
-
-        # Combine all extracted tables into a single string
-        all_tables = []
-        for index, table in enumerate(tables):
-            try:
-                all_tables.append(f"Table {index + 1}:\n{table.df.to_string(index=False)}")
-            except Exception as e:
-                logging.warning(f"Error processing table {index + 1} in {file.filename}: {e}")
-
-        return "\n\n".join(all_tables)
-
-    except Exception as e:
-        logging.error(f"Error extracting tables from PDF {file.filename}: {e}")
-        return f"Error processing the PDF: {str(e)}"
+# def extract_text_from_pdf_camelot(file):
+#     """
+#     Extract tables from a PDF file uploaded via request.files using Camelot.
+#
+#     :param file: A file-like object from FAST_API `request.files`.
+#     :return: Extracted table text as a single string or a message indicating no tables found.
+#     """
+#     try:
+#         # Save the uploaded file to a temporary location
+#         filename = secure_filename(file.filename)
+#         temp_file_path = os.path.join("/tmp", filename)
+#         file.save(temp_file_path)
+#
+#         # Extract tables from the PDF
+#         tables = camelot.read_pdf(temp_file_path, pages="all")
+#
+#         # Remove the temporary file
+#         os.remove(temp_file_path)
+#
+#         # Check if tables were extracted
+#         if not tables or len(tables) == 0:
+#             logging.warning(f"No tables found in PDF: {file.filename}")
+#             return "No tables found."
+#
+#         # Combine all extracted tables into a single string
+#         all_tables = []
+#         for index, table in enumerate(tables):
+#             try:
+#                 all_tables.append(f"Table {index + 1}:\n{table.df.to_string(index=False)}")
+#             except Exception as e:
+#                 logging.warning(f"Error processing table {index + 1} in {file.filename}: {e}")
+#
+#         return "\n\n".join(all_tables)
+#
+#     except Exception as e:
+#         logging.error(f"Error extracting tables from PDF {file.filename}: {e}")
+#         return f"Error processing the PDF: {str(e)}"
 
 
 def extract_text_from_scanned_pdf(file):
@@ -525,45 +525,45 @@ def process_text_with_regex(pdf_text):
         logging.error(f"Error processing text with regex: {type(e).__name__}: {e}")
         return None
 
-def process_text_with_nlp(pdf_text):
-    nlp = spacy.load("en_core_web_sm")
-    """
-    Use spaCy NLP to extract tabular data from the text and return it in JSON format.
-
-    Fields: ProductId, Description, Quantity, Price, Ext_Price
-    """
-    try:
-        doc = nlp(pdf_text)
-        extracted_data = []
-
-        # Iterate over sentences to identify potential tabular data
-        for sentence in doc.sents:
-            words = sentence.text.split()
-            if len(words) >= 5:  # Ensure the sentence has enough components to represent tabular data
-                try:
-                    product_id = words[0]
-                    description = " ".join(words[1:-3])
-                    quantity = int(words[-3])
-                    price = float(words[-2])
-                    ext_price = float(words[-1])
-
-                    extracted_data.append({
-                        "ProductId": product_id,
-                        "Description": description.strip(),
-                        "Quantity": quantity,
-                        "Price": price,
-                        "Ext_Price": ext_price
-                    })
-                except (ValueError, IndexError):
-                    # Skip invalid lines
-                    continue
-
-        # Convert extracted data to JSON format
-        return json.dumps(extracted_data, indent=2)
-
-    except Exception as e:
-        logging.error(f"Error processing text with NLP: {type(e).__name__}: {e}")
-        return None
+# def process_text_with_nlp(pdf_text):
+#     nlp = spacy.load("en_core_web_sm")
+#     """
+#     Use spaCy NLP to extract tabular data from the text and return it in JSON format.
+#
+#     Fields: ProductId, Description, Quantity, Price, Ext_Price
+#     """
+#     try:
+#         doc = nlp(pdf_text)
+#         extracted_data = []
+#
+#         # Iterate over sentences to identify potential tabular data
+#         for sentence in doc.sents:
+#             words = sentence.text.split()
+#             if len(words) >= 5:  # Ensure the sentence has enough components to represent tabular data
+#                 try:
+#                     product_id = words[0]
+#                     description = " ".join(words[1:-3])
+#                     quantity = int(words[-3])
+#                     price = float(words[-2])
+#                     ext_price = float(words[-1])
+#
+#                     extracted_data.append({
+#                         "ProductId": product_id,
+#                         "Description": description.strip(),
+#                         "Quantity": quantity,
+#                         "Price": price,
+#                         "Ext_Price": ext_price
+#                     })
+#                 except (ValueError, IndexError):
+#                     # Skip invalid lines
+#                     continue
+#
+#         # Convert extracted data to JSON format
+#         return json.dumps(extracted_data, indent=2)
+#
+#     except Exception as e:
+#         logging.error(f"Error processing text with NLP: {type(e).__name__}: {e}")
+#         return None
 
 
 import re

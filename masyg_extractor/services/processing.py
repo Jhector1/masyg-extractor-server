@@ -17,7 +17,7 @@ from masyg_extractor.services.file_extractor_service import (
     extract_text_from_pdf_image,
     extract_text_with_ocr_space,
     extract_text_from_scanned_pdf,
-    extract_text_from_pdf_camelot,
+    # extract_text_from_pdf_camelot,
     process_text_with_gpt,
 )
 
@@ -32,7 +32,7 @@ def get_extractor_list(file_type: str) -> List[Any]:
             extract_text_from_pdf_image,
             extract_text_with_ocr_space,
             extract_text_from_scanned_pdf,
-            extract_text_from_pdf_camelot,
+            # extract_text_from_pdf_camelot,
         ]
     return [extract_text_from_image]
 
