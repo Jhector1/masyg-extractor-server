@@ -4,7 +4,7 @@ from itertools import chain
 from pprint import pprint
 from typing import List, Dict, Any, Iterable
 from fastapi import Request
-from sympy.physics.units import amount
+# from sympy.physics.units import amount
 
 from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
 from masyg_extractor.integration_qb_v5.domain.models import Item, Customer, Invoice, Document
