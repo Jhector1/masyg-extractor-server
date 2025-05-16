@@ -361,12 +361,14 @@ class ResetRequest(BaseModel):
 @router.post("/request-reset")
 async def request_reset(request: Request, reset_req: ResetRequest, background_tasks: BackgroundTasks):
     email = reset_req.email
+    print(email)
 
     loop = asyncio.get_running_loop()
     users_query = await loop.run_in_executor(
         executor,
         lambda: list(ref.where('email', '==', email).stream()) if ref else []
     )
+    print(users_query)
     if not users_query:
         raise HTTPException(status_code=404, detail="No account found with this email.")
 
@@ -376,9 +378,10 @@ async def request_reset(request: Request, reset_req: ResetRequest, background_ta
         executor,
         lambda: user_doc.reference.update({'resetToken': token})
     )
+    print(token)
 
     reset_url = f"{os.getenv('CLIENT_URL')}/reset-password/{token}"
-
+    print("RESET URL",reset_url)
     # Build a modern HTML email template with inline CSS
     html_body = f"""
     <html>
