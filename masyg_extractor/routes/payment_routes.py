@@ -148,18 +148,18 @@ async def customer_portal(request: Request, current_user: dict = Depends(get_cur
         raise HTTPException(status_code=400, detail="Failed to create customer portal session")
 
 
-from fastapi import  status
+# from fastapi import  status
 
 
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
-from firebase_admin import firestore
-
-from masyg_extractor.config.jwt_config import get_current_user_from_cookie
-
-router = APIRouter(prefix="/payment")
-firestore_db = firestore.client()
+# from datetime import datetime
+from fastapi import status
+# from fastapi.responses import JSONResponse
+# from firebase_admin import firestore
+#
+# from masyg_extractor.config.jwt_config import get_current_user_from_cookie
+#
+# router = APIRouter(prefix="/payment")
+# firestore_db = firestore.client()
 users = firestore_db.collection("users")
 
 @router.post("/plan/trial")

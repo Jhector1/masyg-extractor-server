@@ -20,7 +20,9 @@ def update_firestore_user(user_id: str, is_subscribed: bool, has_used_trial: boo
         if request and hasattr(request, "session") and "user" in request.session:
             request.session["user"]["hasUsedTrial"] = has_used_trial
     doc_ref = ref.document(user_id)
+    print(doc_ref)
     doc_ref.update(update_data)
+    #jfhfh
 
 
 def handle_subscription_created(data: dict, firebase_user: dict, firebase_user_id: str, request: Request = None):

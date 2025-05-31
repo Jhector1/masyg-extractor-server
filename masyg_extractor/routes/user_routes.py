@@ -368,7 +368,7 @@ async def request_reset(request: Request, reset_req: ResetRequest, background_ta
         executor,
         lambda: list(ref.where('email', '==', email).stream()) if ref else []
     )
-    print(users_query)
+    # print(users_query)
     if not users_query:
         raise HTTPException(status_code=404, detail="No account found with this email.")
 
@@ -378,7 +378,7 @@ async def request_reset(request: Request, reset_req: ResetRequest, background_ta
         executor,
         lambda: user_doc.reference.update({'resetToken': token})
     )
-    print(token)
+    # print(token)
 
     reset_url = f"{os.getenv('CLIENT_URL')}/reset-password/{token}"
     print("RESET URL",reset_url)
@@ -481,21 +481,28 @@ async def reset_password(request: Request):
 @router.post("/create-customer-portal")
 async def create_customer_portal(request: Request,  current_user: dict = Depends(get_current_user_from_cookie)):
     try:
-        if 'user' not in request.session:
-            raise HTTPException(status_code=401, detail="User not logged in")
+        # if 'user' not in request.session:
+        #     print("u44rur")
+        #     raise HTTPException(status_code=401, detail="User not logged in")
 
         # firebase_user = request.session['user']
+        # print(user_i d, "user_id")
+
         firebase_user_id = current_user.get('userId')
+        # print(firebase_user_id, "user_id")
+
         loop = asyncio.get_running_loop()
         doc = await loop.run_in_executor(
             executor,
             lambda: ref.document(firebase_user_id).get()
         )
         if not doc.exists:
+            # print("urddur")
             raise HTTPException(status_code=404, detail="User not found in Firestore")
         user_data = doc.to_dict()
         customer_id = user_data.get('stripeCustomerId')
         if not customer_id:
+            # print("urur")
             raise HTTPException(status_code=400, detail="Stripe customer ID not found for the user")
 
         session_data = stripe.billing_portal.Session.create(
@@ -506,6 +513,7 @@ async def create_customer_portal(request: Request,  current_user: dict = Depends
 
     except Exception as e:
         print(f"Error creating customer portal: {e}")
+        print(str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -529,7 +537,7 @@ async def delete_my_account(
 
     # Validate that the authenticated user has a valid user ID.
     user_id = current_user.get('userId')
-    # print(user_id, "user_id")
+    print(user_id, "user_id")
     if not user_id:
         logger.error("Authenticated user does not have a userId")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID not found")
