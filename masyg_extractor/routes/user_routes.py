@@ -263,12 +263,17 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
 
 @router.post("/logout")
 async def logout(request: Request, response: Response):
-    # Delete the JWT and CSRF token cookies so that subsequent requests are unauthenticated.
-    response.delete_cookie("access_token")
-    response.delete_cookie("csrf_token")
-    request.session.clear()
+    # Expire all cookies by deleting them (access, refresh, csrf)
+    response.delete_cookie("access_token", path="/", samesite="lax")
+    response.delete_cookie("refresh_token", path="/", samesite="lax")
+    response.delete_cookie("csrf_token", path="/", samesite="lax")
+
+    # Clear server session (if used)
+    if hasattr(request, "session"):
+        request.session.clear()
 
     return {"message": "Logout successful"}
+
 
 
 
@@ -609,8 +614,8 @@ async def delete_my_account(
 users_coll = firestore_db.collection("users")
 
 
-ACCESS_TOKEN_EXPIRE_MINUTES = 15
-REFRESH_TOKEN_EXPIRE_DAYS   = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 1
+REFRESH_TOKEN_EXPIRE_DAYS   =2
 
 # def create_access_token(data: dict, expires_delta: timedelta):
 #     # returns a JWT string, as you already have implemented
