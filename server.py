@@ -197,13 +197,7 @@ async def disconnect(sid):
 # Export ONE ASGI app: Socket.IO wrapped around FastAPI
 # ──────────────────────────────────────────────────────────────────────────────
 app = __import__("socketio").ASGIApp(sio, other_asgi_app=inner)
-# FastAPI
-@app.get("/")
-def root():
-    return {"ok": True}
-@app.get("/health")
-def health():
-    return {"ok": True}
+
 if __name__ == "__main__":
   import uvicorn
   uvicorn.run("server:app", host="0.0.0.0", port=int(os.getenv("SERVER_PORT", 5000)), reload=(ENV=="development"))
