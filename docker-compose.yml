@@ -9,7 +9,7 @@ services:
     networks: [public]
     ports: ["5000:5000"]     # OK to keep for debugging; optional with Caddy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/"]
+      test: [ "CMD-SHELL", "python -c \"import socket; socket.create_connection(('127.0.0.1',5000),2).close()\"" ]
       interval: 20s
       timeout: 5s
       retries: 5
