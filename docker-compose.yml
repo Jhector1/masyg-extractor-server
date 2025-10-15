@@ -1,16 +1,14 @@
 services:
   masyg-extractor-app:
     build:
-      context: ./app
+      context: .            # was: ./app
       dockerfile: Dockerfile
     container_name: masyg-extractor-app
     env_file: .env
     restart: unless-stopped
     networks: [public]
-    expose:
-      - "5000"
+    ports: ["5000:5000"]    # publish to host; remove if you use a reverse proxy
     healthcheck:
-      # python:3.12-slim has wget; curl may not be present
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/health"]
       interval: 20s
       timeout: 5s
