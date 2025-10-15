@@ -201,7 +201,9 @@ app = __import__("socketio").ASGIApp(sio, other_asgi_app=inner)
 @app.get("/")
 def root():
     return {"ok": True}
-
+@app.get("/health")
+def health():
+    return {"ok": True}
 if __name__ == "__main__":
   import uvicorn
   uvicorn.run("server:app", host="0.0.0.0", port=int(os.getenv("SERVER_PORT", 5000)), reload=(ENV=="development"))
