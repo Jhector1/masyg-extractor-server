@@ -9,7 +9,7 @@ from masyg_extractor.integration_qb_v5.domain.models import Item
 from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
 from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
 from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
-from masyg_extractor.integration_qb_v5.utils import extract_uuid
+from masyg_extractor.integration_qb_v5.utils import extract_uuid, safe_uuid_key
 from masyg_extractor.integrations.xero.services.item_services import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.my_log import logger
@@ -62,86 +62,64 @@ class ItemService:
             return {}
 
     # @staticmethod
+    # In: masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/item_service.py
+    # Replace the whole create_bulk_item_payload method with this version.
+
     async def create_bulk_item_payload(self, item: Item) -> dict:
         """
         Generate payload for creating an item in bulk.
-        Combines a truncated UUID (from transaction_id) with a short SKU segment.
+        - Uses sanitized Name + Sku to keep names unique in QBO.
+        - Includes Sku in payload.
+        - Encodes sku into bId so we can deterministically merge created items.
+        - Ensures Income/Expense accounts exist (falls back to defaults).
         """
         try:
             name = ItemService.get_sanitized_name(item.name)
             if not item.sku:
                 item.sku = generate_sku(name)
-            # Create a short code: first part from UUID and second from SKU (max 5 characters)
-            code_prefix = extract_uuid(item.transaction_id)[:20]
-            code_suffix = item.sku[:5] if item.sku else generate_sku(name)[:5]
-            # code_suffix =  generate_sku(name)[:5]
-            income_account_id = item.income_account.id
-            expense_account_id = item.expense_account.id
-            if not item.name:
-                item_name = "Unnamed Item"
-            code_prefix = extract_uuid(item.transaction_id)[:20]
-            code_suffix = generate_sku(name)[:5]
-            if not item.income_account.id or not item.expense_account.id:
+
+            # Stable tracker per-document + deterministic SKU
+            tracker_prefix = safe_uuid_key(item.transaction_id)
+            sku = item.sku
+
+            income_account_id = getattr(item.income_account, "id", None) if item.income_account else None
+            expense_account_id = getattr(item.expense_account, "id", None) if item.expense_account else None
+
+            if not income_account_id or not expense_account_id:
                 try:
                     default_income, default_expense = await self.get_default_service_accounts()
-                    if not income_account_id:
-                        income_account_id = default_income
-                    if not expense_account_id:
-                        expense_account_id = default_expense
+                    income_account_id = income_account_id or default_income
+                    expense_account_id = expense_account_id or default_expense
                 except Exception as e:
                     logger.error(f"Could not fetch default accounts: {e}")
                     raise
 
             payload = {
-                "TrackQtyOnHand": item.type == "Inventory",
-
+                "TrackQtyOnHand": (item.type == "Inventory"),
                 "QtyOnHand": int(item.QtyOnHand) if item.QtyOnHand is not None else 1,
-                "Name": remove_non_alphanumeric(item.name) if item.name else "Unnamed Item",
-                # "Sku": item.sku if item.sku is not None else "",
-                # "UnitPrice": float(item.unit_price) if item.unit_price is not None else 0,
-                # "Description": item.description if item.description is not None else "",
-                "Type": item.type if item.type is not None else "Service",
-                # "SalesTaxCodeRef": {
-                #     "value": item_data.get("sales_tax_value", 0),
-                #     "name": item_data.get("sales_tax_code", ""),
-                # },
-
+                # Keep Name unique (include sku in parentheses)
+                "Name": f"{name} ({sku})",
+                "Sku": sku,
+                "Type": item.type if item.type else "Service",
                 "Active": True,
-                "IncomeAccountRef": {
-                    "value": income_account_id,
-                    "name": item.income_account.name if item.income_account.name is not None else "Service Fee Income"
-                },
-                "ExpenseAccountRef": {
-                    "value": expense_account_id,
-                    "name": item.expense_account.name if item.expense_account.name is not None else "Cost of Goods Sold"
-                }
+                "IncomeAccountRef": {"value": str(income_account_id)},
+                "ExpenseAccountRef": {"value": str(expense_account_id)},
             }
 
             if item.type == "Inventory":
-                payload["AssetAccountRef"] = {
-                    "name": "Inventory Asset",
-                    "value": "81"
-                }
                 from datetime import date
-
-                # Get today's date
-                today = date.today()
-
-                payload["InvStartDate"] = today.strftime("%Y-%m-%d")
-                payload["PurchaseCost"] = float(item.unit_price)  # Added required field for inventory cost
-                payload["ExpenseAccountRef"] = {
-                    "value": "80",
-                    "name": "Cost of Goods Sold"
-                }
-                payload["IncomeAccountRef"] = {
-                    "name": "Sales of Product Income",
-                    "value": "79"
-                }
+                payload.update({
+                    "AssetAccountRef": {"value": "81"},  # adjust to your environment if needed
+                    "InvStartDate": date.today().strftime("%Y-%m-%d"),
+                    "PurchaseCost": float(item.unit_price or 0),
+                    "ExpenseAccountRef": {"value": "80"},
+                    "IncomeAccountRef": {"value": "79"},
+                })
 
             return {
-                "bId": f"{code_prefix}_{code_suffix}",
+                "bId": f"{tracker_prefix}_{sku}",
                 "Item": payload,
-                "operation": "create"
+                "operation": "create",
             }
 
         except Exception as e:

@@ -214,8 +214,12 @@ async def send_invoice_bulk_route(
                                        repo=repo, client=xero_client)
     clean_data = await normalize_payload(data, "sales_receipt_data")
 
-    return await document_service.send_document_in_bulk(clean_data, await progress_logger.safe_emit_progress(
-        progress_logger.calculate_overall_progress(global_progress)))
+    # emit current overall (optional)
+    await progress_logger.safe_emit_progress(global_progress)
+
+    share_progress = IntegrationsProgressLog.CREATING_DOCUMENTS_WEIGHT
+    return await document_service.send_document_in_bulk(clean_data, share_progress)
+
 
 @router.post("/send-invoice-in-bulk")
 async def send_invoice_bulk_route(
@@ -254,9 +258,11 @@ async def send_invoice_bulk_route(
                                        repo=repo, client=xero_client)
     clean_data = await normalize_payload(data, "invoice_data")
 
-    return await document_service.send_document_in_bulk(clean_data, await progress_logger.safe_emit_progress(
-        progress_logger.calculate_overall_progress(global_progress)))
+    # emit current overall (optional)
+    await progress_logger.safe_emit_progress(global_progress)
 
+    share_progress = IntegrationsProgressLog.CREATING_DOCUMENTS_WEIGHT
+    return await document_service.send_document_in_bulk(clean_data, share_progress)
 
     # user_id: str = current_user["userId"]
     #

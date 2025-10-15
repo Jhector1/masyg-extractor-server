@@ -54,280 +54,150 @@ log_mem("firebase init")
 # Initialize Firebase early.
 from masyg_extractor.firebase.firebase_init import firebase_init
 firebase_init()
+# server.py
+#!/usr/bin/env python
+import os, asyncio, uuid, urllib.parse, logging
+from datetime import datetime, timedelta
+from typing import Optional
 
-from fastapi import FastAPI,Request
+from dotenv import load_dotenv, find_dotenv
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
-from starlette.responses import Response
-
-
+from starlette.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi import FastAPI, Request
-from starlette.responses import Response
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-class DefaultCookieMiddleware(BaseHTTPMiddleware):
-    def __init__(
-        self,
-        app: FastAPI,
-        default_domain: str,
-        default_samesite: str = "strict",
-        default_secure: bool = True,
-        default_httponly: bool = True,
-        default_max_age: int = None
-    ):
-        super().__init__(app)
-        self.default_domain = default_domain
-        self.default_samesite = default_samesite
-        self.default_secure = default_secure
-        self.default_httponly = default_httponly
-        self.default_max_age = default_max_age
-
-    async def dispatch(self, request: Request, call_next):
-        response: Response = await call_next(request)
-        cookies = response.headers.getlist("set-cookie")
-        if cookies:
-            new_cookies = []
-            for cookie in cookies:
-                # For example, you may want to treat "csrf_token" differently:
-                if "csrf_token=" in cookie:
-                    # If the cookie is for CSRF, maybe you don't want HttpOnly.
-                    desired_httponly = False
-                else:
-                    desired_httponly = self.default_httponly
-
-                # Append Domain if missing
-                if "Domain=" not in cookie:
-                    cookie += f"; Domain={self.default_domain}"
-                # Append SameSite if missing
-                if "SameSite=" not in cookie:
-                    cookie += f"; SameSite={self.default_samesite}"
-                # Append Secure if needed
-                if self.default_secure and "Secure" not in cookie:
-                    cookie += "; Secure"
-                # Append HttpOnly if needed
-                if desired_httponly and "HttpOnly" not in cookie:
-                    cookie += "; HttpOnly"
-                # Append Max-Age if specified and missing
-                if self.default_max_age is not None and "Max-Age=" not in cookie:
-                    cookie += f"; Max-Age={self.default_max_age}"
-                new_cookies.append(cookie)
-
-            response.headers.__delitem__("set-cookie")
-            for cookie in new_cookies:
-                response.headers.append("set-cookie", cookie)
-        return response
-# Create FastAPI app.
-app = FastAPI()
-secret_key = os.getenv('SECRET_KEY', 'BAD_SECRET_KEY')
-
-
-init_mail(app)
-
-
-if ENV == "production":
-
-    # Starlette’s SessionMiddleware uses a cookie-based session.
-    # For a Redis-backed store you could integrate a third-party library.
-    app.add_middleware(
-        SessionMiddleware,
-        secret_key=secret_key,
-        same_site="none",
-        https_only=True  # SESSION_COOKIE_SECURE=True
-    )
-
-    app.add_middleware(
-        DefaultCookieMiddleware,
-        default_domain=".masyglink.com",
-        default_samesite="none",
-        default_secure=True, # dme
-        default_httponly=True,
-        default_max_age=1800  # e.g., 30 minutes
-    )
-
-    # app.add_middleware(DefaultCookieMiddleware, default_domain=".masyglink.com", default_samesite="strict")
-
-    # Add middleware to fix proxy headers (similar to ProxyFix in Flask)
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-
-    # Force HTTPS redirection.
-    # app.add_middleware(HTTPSRedirectMiddleware)
-
-    # Optionally set cookie domain based on SERVER_URL.
-    server_url = os.getenv('SERVER_URL')
-    if server_url:
-        # Custom middleware or response customization would be required
-        # to set SESSION_COOKIE_DOMAIN since SessionMiddleware doesn't expose that directly.
-        pass
-else:
-    app.add_middleware(SessionMiddleware, secret_key=secret_key)
-
-    # Load development configuration if needed.
-    # pass
-
-# Set up CORS.
-origins = [os.getenv('CLIENT_URL'), "http://localhost:3000"]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# init_mail For caching you could integrate a FastAPI caching library.
-# For now, this code omits a direct caching equivalent.
-
-# Talisman equivalent: You may want to add custom middleware or use libraries
-# to set secure headers as Talisman does in Flask.
-# (This example does not include an exact Talisman replacement.)
-
-# Initialize Stripe.
-stripe.set_app_info(
-    'stripe-samples/checkout-single-subscription',
-    version='0.0.1',
-    url='https://github.com/stripe-samples/checkout-single-subscription'
-)
-stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
-
-# Register your routers (Flask blueprints equivalent).
-# Your register_routers function should import and include your routes.
-from masyg_extractor.routes import register_routers
-register_routers(app)
-
-# # Set up logging.
-# logger = logging.getLogger(__name__)
-# logger.setLevel(logging.DEBUG if ENV == "development" else logging.INFO)
-
-# Uncomment and adjust logging as needed.
-# if ENV == "development":
-#     logger.setLevel(logging.DEBUG)
-#     console_handler = logging.StreamHandler()
-#     console_handler.setLevel(logging.DEBUG)
-#     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-#     console_handler.setFormatter(formatter)
-#     logger.addHandler(console_handler)
-# else:
-#     logger.setLevel(logging.INFO)
-
-# Set up Socket.IO.
-
-db = firestore.client()
+from firebase_admin import firestore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+# 🔌 use the SAME sio instance everywhere
+from masyg_extractor.utils.extensions import sio
+from masyg_extractor.routes import register_routers
+from masyg_extractor.services.helper import init_mail
+
+load_dotenv(find_dotenv())
+
+ENV = os.getenv("FAST_API_ENV", "development").lower()
+SECRET_KEY = os.getenv("SECRET_KEY", "BAD_SECRET_KEY")
+CLIENT_URL = os.getenv("CLIENT_URL", "http://localhost:3000")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cookie defaults (keeps domain/samesite consistent in prod)
+# ──────────────────────────────────────────────────────────────────────────────
+class DefaultCookieMiddleware(BaseHTTPMiddleware):
+  def __init__(self, app: FastAPI, default_domain: str, default_samesite: str = "strict",
+               default_secure: bool = True, default_httponly: bool = True, default_max_age: Optional[int] = None):
+    super().__init__(app)
+    self.default_domain = default_domain
+    self.default_samesite = default_samesite
+    self.default_secure = default_secure
+    self.default_httponly = default_httponly
+    self.default_max_age = default_max_age
+
+  async def dispatch(self, request: Request, call_next):
+    resp: Response = await call_next(request)
+    cookies = resp.headers.getlist("set-cookie")
+    if cookies:
+      new_ = []
+      for c in cookies:
+        httponly = False if "csrf_token=" in c else self.default_httponly
+        if "Domain=" not in c: c += f"; Domain={self.default_domain}"
+        if "SameSite=" not in c: c += f"; SameSite={self.default_samesite}"
+        if self.default_secure and "Secure" not in c: c += "; Secure"
+        if httponly and "HttpOnly" not in c: c += "; HttpOnly"
+        if self.default_max_age is not None and "Max-Age=" not in c: c += f"; Max-Age={self.default_max_age}"
+        new_.append(c)
+      resp.headers.__delitem__("set-cookie")
+      for c in new_: resp.headers.append("set-cookie", c)
+    return resp
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FastAPI core app
+# ──────────────────────────────────────────────────────────────────────────────
+inner = FastAPI()
+init_mail(inner)
+
+if ENV == "production":
+  inner.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="none", https_only=True)
+  inner.add_middleware(DefaultCookieMiddleware,
+                       default_domain=".masyglink.com",
+                       default_samesite="none",
+                       default_secure=True,
+                       default_httponly=True,
+                       default_max_age=1800)
+  inner.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+else:
+  inner.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+
+inner.add_middleware(
+  CORSMiddleware,
+  allow_origins=[CLIENT_URL, "http://localhost:3000"],
+  allow_credentials=True,
+  allow_methods=["*"],
+  allow_headers=["*"],
+)
+
+# Register all HTTP routes (including /extractor/* that emit progress)
+register_routers(inner)
+
+# Firestore + daily job (unchanged)
+db = firestore.client()
 def expire_free_trials():
-    # 30 days ago (UTC)
-    cutoff = datetime.utcnow() - timedelta(days=30)
+  cutoff = datetime.utcnow() - timedelta(days=30)
+  for user_snap in db.collection("users").stream():
+    uid = user_snap.id
+    trial_ref = db.collection("users").document(uid).collection("plan").document("trial")
+    snap = trial_ref.get()
+    if not snap.exists: continue
+    trial = snap.to_dict()
+    if trial.get("hasUsed") and trial.get("date") <= cutoff:
+      db.collection("users").document(uid).update({"isSubscribed": False})
+  print("✅ Expired any >30-day trials.")
 
-    # Loop all users (you can optimize this with a query)
-    for user_snap in db.collection("users").stream():
-        uid = user_snap.id
-        trial_ref = (
-            db.collection("users")
-              .document(uid)
-              .collection("plan")
-              .document("trial")
-        )
-        # redis
-        trial_snap = trial_ref.get()
-        if not trial_snap.exists:
-            continue
+@inner.on_event("startup")
+def _startup():
+  sch = AsyncIOScheduler(timezone="America/Chicago")
+  sch.add_job(expire_free_trials, "cron", hour=0, minute=0)
+  sch.start()
 
-        trial = trial_snap.to_dict()
-        # trial["date"] is a Firestore Timestamp in the DB,
-        # but comparing it to a Python datetime works out of the box.
-        if trial.get("hasUsed") and trial.get("date") <= cutoff:
-            # 1) flip isSubscribed off
-            db.collection("users").document(uid).update({
-                "isSubscribed": False
-            })
-            # 2) optional: delete or mark the trial doc
-            # trial_ref.delete()
-
-    print("✅ Expired any >30-day trials.")
-
-
-# 3) Wire up APScheduler in the startup event
-@app.on_event("startup")
-def start_scheduler():
-    scheduler = AsyncIOScheduler(timezone="America/Chicago")
-    # run daily at midnight in Chicago time
-    scheduler.add_job(expire_free_trials, "cron", hour=0, minute=0)
-    scheduler.start()
-
-
-
-
-
-
-
-
-import socketio
-
-@app.post("/client-id")
+# ──────────────────────────────────────────────────────────────────────────────
+# Session client-id endpoint (used by SocketProvider before connecting)
+# ──────────────────────────────────────────────────────────────────────────────
+@inner.post("/client-id")
 async def get_client_id(request: Request):
-    client_id = request.session.get("client_id")
-    if not client_id:
-        client_id = str(uuid.uuid4())
-        request.session["client_id"] = client_id
-    return JSONResponse({"clientId": client_id})
+  cid = request.session.get("client_id")
+  if not cid:
+    cid = str(uuid.uuid4())
+    request.session["client_id"] = cid
+  return JSONResponse({"clientId": cid})
 
-
-# Create an async Socket.IO server with allowed CORS origins.
-# sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=origins)
-# @app.on_event("startup")
-# async def startup_event():
-#     # Start the background log processor.
-#     asyncio.create_task(log_processor(sio))
-# --- Socket.IO events ---
+# ──────────────────────────────────────────────────────────────────────────────
+# Socket.IO events (ONE connect handler only)
+# ──────────────────────────────────────────────────────────────────────────────
 @sio.event
 async def connect(sid, environ, auth):
-    # Extract query string parameters.
-    # In FastAPI the query string is available in the ASGI scope.
-    query_string = environ.get("asgi.scope", {}).get("query_string", b"").decode()
-    query_params = urllib.parse.parse_qs(query_string)
-    client_id = query_params.get('clientId', ['Guest'])[0]
+  # Prefer the query param ?clientId= set by your SocketProvider
+  qs = environ.get("asgi.scope", {}).get("query_string", b"").decode()
+  params = urllib.parse.parse_qs(qs)
+  client_id = (auth or {}).get("client_id") or params.get("clientId", ["Guest"])[0]
 
-    await sio.enter_room(sid, client_id)
+  await sio.enter_room(sid, client_id)
+  await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, room=client_id)
 
-    await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, room=client_id)
-
-    # Update the global event loop if needed.
-    from masyg_extractor.services import global_executor
-    global_executor.MAIN_LOOP = asyncio.get_running_loop()
-
-
-''''@sio.event
-async def connect(sid, environ, auth):
-    await sio.enter_room(sid, sid)  # Use the sid as the room.
-    print(f"Client connected: {sid}")
-
-    # Configure logging for this connection.
-    socket_handler = SocketIOHandler(sio, sid)
-    socket_handler.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    socket_handler.setFormatter(formatter)
-    logger.addHandler(socket_handler)
-
-    # logger.info(f"Welcome, client with sid {sid}!")
-    from masyg_extractor.services import global_executor
-    global_executor.MAIN_LOOP = asyncio.get_running_loop()'''
-
+  # make loop available elsewhere if you rely on it
+  from masyg_extractor.services import global_executor
+  global_executor.MAIN_LOOP = asyncio.get_running_loop()
 
 @sio.event
 async def disconnect(sid):
-    print(f"Client disconnected: {sid}")
+  print(f"Client disconnected: {sid}")
 
-# --- ASGI integration ---
-# Wrap the FastAPI app with Socket.IO’s ASGIApp.
-# This combines the Socket.IO server with your FastAPI routes.
-app = socketio.ASGIApp(sio, other_asgi_app=app)
+# ──────────────────────────────────────────────────────────────────────────────
+# Export ONE ASGI app: Socket.IO wrapped around FastAPI
+# ──────────────────────────────────────────────────────────────────────────────
+app = __import__("socketio").ASGIApp(sio, other_asgi_app=inner)
 
 if __name__ == "__main__":
-    import uvicorn
-    server_port = int(os.getenv("SERVER_PORT", 5000))
-    print(f"Starting ASGI server on port {server_port}")
-    if ENV == "development":
-        uvicorn.run("server:app", host="0.0.0.0", port=server_port, reload=True)
-    else:
-        uvicorn.run("server:app", host="0.0.0.0", port=server_port)
+  import uvicorn
+  uvicorn.run("server:app", host="0.0.0.0", port=int(os.getenv("SERVER_PORT", 5000)), reload=(ENV=="development"))

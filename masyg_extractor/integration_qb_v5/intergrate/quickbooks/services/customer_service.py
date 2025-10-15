@@ -7,7 +7,7 @@ from masyg_extractor.integration_qb_v5.domain.models import Customer
 from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
 from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
 from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
-from masyg_extractor.integration_qb_v5.utils import extract_uuid
+from masyg_extractor.integration_qb_v5.utils import extract_uuid, safe_uuid_key
 from masyg_extractor.integrations.xero.services.item_services import generate_sku
 from masyg_extractor.services.my_log import logger
 
@@ -43,7 +43,7 @@ class CustomerService:
         """
         try:
             sanitized_name = CustomerService.get_sanitized_name(customer.name)
-            # Uncomment and modify the email logic if email info is needed.
+            # Uncomment extract_uuid and modify the email logic if email info is needed.
             # email_address = f"{sanitized_name}@example.com"
             return {
                 "Customer": customer.name,
@@ -67,7 +67,7 @@ class CustomerService:
                 "PrimaryEmailAddr": {"Address": email_address}
             }
             return {
-                "bId":  extract_uuid(customer.transaction_id)[:20] + "_"+generate_sku(customer.name),
+                "bId": safe_uuid_key(customer.transaction_id) + "_" + generate_sku(customer.name),
                 "Customer": payload,
                 "operation": "create"
             }
@@ -179,7 +179,7 @@ class CustomerService:
             customer_list = list(local_customers.values())
             print(customer_list)
 
-            # Filter out customers that already exist.
+            # Filter extract_uuid out customers that already exist.
             non_existing_customers = cast(
                 List[Customer],
                 await self.entity_helper.get_non_existing_entities(customer_list, entity, name_key, id_key)

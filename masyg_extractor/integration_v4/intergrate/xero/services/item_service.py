@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, cast
 
 from fastapi import Request
 
+from masyg_extractor.integration_qb_v5.utils import safe_uuid_key
 from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
 from masyg_extractor.integration_v4.domain.models import Item
 from masyg_extractor.integration_v4.entity_helper import EntityHelper
@@ -72,7 +73,7 @@ class ItemService:
             if not item.sku:
                 item.sku = generate_sku(name)
             # Create a short code: first part from UUID and second from SKU (max 5 characters)
-            code_prefix = extract_uuid(item.transaction_id)[:20]
+            code_prefix = safe_uuid_key(item.transaction_id)
             code_suffix = item.sku if item.sku else generate_sku(name, 6)
             # code_suffix =  generate_sku(name)[:5]
 

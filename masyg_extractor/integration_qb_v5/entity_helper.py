@@ -30,34 +30,48 @@ class EntityHelper:
         """Checks if an item with a particular code exists within the locally cached items."""
         return any(item.get("Id") == entity_id for item in cached_items)
 
+    # In: masyg_extractor/integration_qb_v5/entity_helper.py
+    # Replace the whole get_non_existing_entities method with this version.
+
     async def get_non_existing_entities(
-        self, local_entities: List[Entity],
-        endpoint: str, name_field: str, id_field: str
+            self,
+            local_entities: List[Entity],
+            endpoint: str,
+            name_field: str,
+            id_field: str
     ) -> List[Entity]:
         """
-        Compares local entities with integration entities and returns
-        a list of local entities that don't exist in the integration.
+        Compares local entities with integration entities and returns the list
+        of local entities that don't exist in the integration.
+        - For Items, prefer Sku matching if available.
+        - For Customers (and others), use Name/Id.
         """
-        # params={"query": f"SELECT * FROM {endpoint}"}
         integration_entities = await self.fetch_all_entities(endpoint, name_field, id_field)
 
-        # pprint( integration_entities)
-        integration_ids = {entity.get("Id") for entity in integration_entities}
+        existing_ids = {e.get("Id") for e in integration_entities}
+        existing_names = {e.get("Name") for e in integration_entities}
+        existing_skus = {e.get("Sku") for e in integration_entities if e.get("Sku")}
 
-        integration_names = {entity.get("Name") for entity in integration_entities}
-
-        non_existing_entities = []
-
-
+        non_existing: List[Entity] = []
         for entity in local_entities:
-            if isinstance(entity, Customer):
-                if entity.name not in integration_names and entity.id not in integration_ids:
-                    non_existing_entities.append(entity)
-            else:
-                if entity.name not in integration_names  and entity.id not in integration_ids:
+            # Items: prefer Sku
+            if endpoint == "Item" and isinstance(entity, Item):
+                sku = getattr(entity, "sku", None)
+                if sku:
+                    if sku not in existing_skus:
+                        non_existing.append(entity)
+                else:
+                    # fallback to Name/Id if no SKU
+                    if (getattr(entity, "id", None) not in existing_ids) and (entity.name not in existing_names):
+                        non_existing.append(entity)
+                continue
 
-                    non_existing_entities.append(entity)
-        return non_existing_entities
+            # Others: Name/Id
+            ent_id = getattr(entity, "id", None)
+            if ent_id not in existing_ids and entity.name not in existing_names:
+                non_existing.append(entity)
+
+        return non_existing
 
     async def check_entity_exists(
         self, entity: str, identifier_field: str, identifier_value: str
@@ -201,6 +215,12 @@ class EntityHelper:
 
     logger = logging.getLogger(__name__)
 
+    # In: masyg_extractor/integration_qb_v5/entity_helper.py
+    # Replace the whole create_entity_in_bulk_and_merge_with_current method with this version.
+
+    from collections import defaultdict
+    from typing import Any, Dict, List, Optional, Union
+
     async def create_entity_in_bulk_and_merge_with_current(
             self,
             current_entities: Dict[str, Union[Any, List[Any]]],
@@ -211,84 +231,102 @@ class EntityHelper:
             tracker_key: str = "bId"
     ) -> Dict[str, Union[Any, List[Any]]]:
         """
-        Creates entities in bulk (if payload provided) and merges/updates
-        IDs into `current_entities` based on matching names.
-        """
+        Creates entities in bulk (if payload provided) and merges/updates IDs into
+        `current_entities` based on SKU encoded in bId (best) or Name (fallback).
 
+        - Expects QBO batch response entries like:
+          { "Item": {...}, "bId": "...", "operation": "create" }
+        """
         logger.info("Merging current entities for %s: %r", entity, current_entities)
 
-        # If there's nothing to create, just fetch and backfill missing IDs
+        # If no batch to create, just backfill any missing IDs from integration
         batch = payload.get("BatchItemRequest") if payload else None
         if not batch:
-
             integration = await self.fetch_all_entities(entity, name_key, id_key)
-
-            # build name → id map
-            name_to_id = {
-                e["Name"]: e["Id"]
-                for e in integration
-                if "Name" in e and "Id" in e
-            }
-
+            name_to_id = {e.get("Name"): e.get("Id") for e in integration if e.get("Name") and e.get("Id")}
             for tracker, items in current_entities.items():
-                # normalize to a list so we handle both single‐object and list cases
                 objs = items if isinstance(items, list) else [items]
-                print(entity,tracker, objs)
-
                 for obj in objs:
                     if getattr(obj, "id", None) is None:
-                        # now assign to the individual object!
                         obj.id = name_to_id.get(obj.name)
-
             return current_entities
 
-        # 1) create new entities in bulk
+        # 1) create new in bulk
         created = await self.create_entity_in_bulk(entity, payload)
         logger.info("Bulk-created entities: %r", created)
 
-        # 2) normalize current_entities into tracker_key → [objects] map
+        # 2) normalize current_entities into tracker → [objects]
         tracker_map: Dict[str, List[Any]] = defaultdict(list)
         for tracker, val in current_entities.items():
-            if isinstance(val, list):
-                tracker_map[tracker].extend(val)
-            else:
-                tracker_map[tracker].append(val)
+            tracker_map[tracker].extend(val if isinstance(val, list) else [val])
 
-        # 3) merge created back into locals
+        # 3) merge back using sku encoded in bId
         for e in created:
-            if all(k in e for k in (tracker_key, name_key, id_key)):
-                tracker = e[tracker_key].split("_", 1)[0]
-                for local in tracker_map.get(tracker, []):
-                    if local.name == e[name_key] and not getattr(local, "id", None):
-                        local.name = e[name_key]
-                        local.id = e[id_key]
-                        # if this type has an sku field, set it too
-                        if hasattr(local, "sku"):
-                            local.sku = e[tracker_key]
-                        break
+            b_id = e.get(tracker_key)
+            if not b_id:
+                continue
+
+            # bId format: "<tracker>_<sku>"
+            parts = b_id.split("_", 1)
+            tracker = parts[0]
+            sku_suffix = parts[1] if len(parts) > 1 else None
+
+            # Pull inner object for the entity, e.g. "Item": {...}
+            entity_obj = e.get(entity) or {}
+            ent_id = entity_obj.get("Id")
+            ent_name = entity_obj.get("Name")
+            ent_sku = entity_obj.get("Sku")
+
+            candidates = tracker_map.get(tracker, [])
+            for local in candidates:
+                # Prefer exact SKU match
+                local_sku = getattr(local, "sku", None)
+                if sku_suffix and local_sku and local_sku == sku_suffix:
+                    if not getattr(local, "id", None):
+                        local.id = ent_id
+                        local.name = ent_name or local.name
+                    break
+
+                # Fallback: match by Name (only safe when unique)
+                if local.name == ent_name and not getattr(local, "id", None):
+                    local.id = ent_id
+                    if hasattr(local, "sku") and not getattr(local, "sku", None):
+                        setattr(local, "sku", ent_sku)
+                    break
 
         return current_entities
 
+    # In: masyg_extractor/integration_qb_v5/entity_helper.py
+    # Replace the whole fetch_all_entities method with this version.
+
     async def fetch_all_entities(
-        self, endpoint: str, name_field: str = "Name", id_field: str = "Id", params: Optional[Dict[str, str]] = None
+            self,
+            endpoint: str,
+            name_field: str = "Name",
+            id_field: str = "Id",
+            params: Optional[Dict[str, str]] = None
     ) -> List[Dict[str, Any]]:
         """
-        Fetches all entities from QuickBooks. If a where_clause is provided, it is added to the GET request.
+        Fetches all entities from QuickBooks. Includes Sku for Items.
         """
-
-
         response = await self.client.request(
             self.repo.get_integration_token(),
             "query",
             method="GET",
-            params = {"query": f"SELECT * FROM {endpoint} STARTPOSITION 1 MAXRESULTS 1000"},
+            params={"query": f"SELECT * FROM {endpoint} STARTPOSITION 1 MAXRESULTS 1000"},
         )
-        # pprint(response)
-        entities = response["QueryResponse"].get(endpoint, [])
-        # pprint(entities)
-        # print(json.dumps(response, indent=2, sort_keys=True))
-
-        return [{"Name": entity.get(name_field), "Id": entity.get(id_field)} for entity in entities]
+        entities = response.get("QueryResponse", {}).get(endpoint, [])
+        out: List[Dict[str, Any]] = []
+        for entity in entities:
+            row = {
+                "Name": entity.get(name_field),
+                "Id": entity.get(id_field),
+            }
+            # Capture Sku if this is an Item
+            if endpoint == "Item" and "Sku" in entity:
+                row["Sku"] = entity.get("Sku")
+            out.append(row)
+        return out
 
     async def get_all_entities(
         self, endpoint: str, name_field: str = "Name", id_field: str = "Id", where_clause: Optional[str] = None

@@ -2,6 +2,7 @@ import asyncio
 from pprint import pprint
 from typing import List, Dict, Any
 
+from masyg_extractor.integration_qb_v5.utils import safe_uuid_key
 from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
 from masyg_extractor.integration_v4.domain.models import Document
 from masyg_extractor.integration_v4.entity_helper import EntityHelper
@@ -118,7 +119,7 @@ class DocumentService:
                     await self._log("Items required for invoice creation.", "error")
                     continue
 
-                key = extract_uuid(document.transaction_id)[:20]
+                key = safe_uuid_key(document.transaction_id)
                 customers_map[key] = document.customer
                 items_map[key] = document.items
 
@@ -135,8 +136,8 @@ class DocumentService:
             # Build payloads for each document.
             for document in documents:
                 try:
-                    key = extract_uuid(document.transaction_id)[:20]
-                    # Use a default empty list if no items were created for this key.
+                    key = safe_uuid_key(document.transaction_id)
+                    # extract_uuid Use a default empty list if no items were created for this key.
                     reference_items = items_created.get(key) or []
                     if not reference_items:
                         await self._log(

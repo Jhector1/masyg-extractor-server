@@ -4,6 +4,7 @@ from masyg_extractor.integration_qb_v5.routers.qb_router import router as quickb
 from masyg_extractor.integration_v4.routers.xero_router  import router as xero_router
 
 from .admin.admin_webhook import router as webhook_router
+from debug_routes import router as debug_router
 
 def register_routers(app: FastAPI):
     from .data_extractor_routes import router as file_extractor_router
@@ -29,3 +30,5 @@ def register_routers(app: FastAPI):
     # app.include_router(quickbook_auth_router, prefix="/api")
 
     app.include_router(analytics_router, prefix="/api")
+    app.include_router(debug_router)
+
