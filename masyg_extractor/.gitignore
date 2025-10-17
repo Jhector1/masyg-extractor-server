@@ -6,7 +6,8 @@ __pycache__/
 # Environment variables and configuration
 .env
 *.env
-
+.masyg-extractor-test-firebase-adminsdk-zypo5-2030d95b83.json
+.masyg-extractor-f7610ba16076.json
 # FAST_API secret key or config files
 instance/
 service_account_base64.txt

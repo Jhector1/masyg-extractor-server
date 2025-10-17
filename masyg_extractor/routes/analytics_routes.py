@@ -99,7 +99,8 @@ async def get_dashboard_analytics( current_user: dict = Depends(get_current_user
 
             # Aggregate spending by category
             for line_item in file_data.get("line_items", []):
-                category = line_item.get("category", "").capitalize()
+                raw_cat = line_item.get("category")  # could be None or ""
+                category = _safe_capitalize(raw_cat, default="Uncategorized")
                 total_amount= line_item.get("unit_price")
                 if category and total_amount is not None:
                     try:
@@ -123,3 +124,7 @@ async def get_dashboard_analytics( current_user: dict = Depends(get_current_user
     await redis_client.set(cache_key, json.dumps(analytics), ex=300)
 
     return JSONResponse(content=analytics, status_code=200)
+def _safe_capitalize(val: object, default: str = "") -> str:
+    """Return a nicely-capitalized string or a default when val is None/blank."""
+    s = (val or "").strip()
+    return s[:1].upper() + s[1:].lower() if s else default
