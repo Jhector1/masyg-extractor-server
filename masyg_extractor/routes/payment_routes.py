@@ -9,6 +9,7 @@ from firebase_admin import firestore
 
 from masyg_extractor.config.jwt_config import get_current_user_from_cookie
 from masyg_extractor.services.subscription_services import *  # Ensure these functions are updated to use Firestore as well
+from masyg_extractor.services.subscription_services import _recompute_is_subscribed
 
 # Initialize Firestore client and reference to the "users" collection.
 firestore_db = firestore.client()
@@ -117,6 +118,9 @@ async def create_checkout_session(request : Request, current_user: dict = Depend
                 subscription_data={
                     "trial_period_days": 7 if free_trial and not has_used_trial else None
                 },
+                client_reference_id=firebase_user_id,  # ✅ helps map user
+                metadata={"firebaseUserId": firebase_user_id},  # ✅ another fallback
+
                 consent_collection={"terms_of_service": "required"},
             )
         checkout_session_obj = await run_in_threadpool(blocking_create_checkout)
@@ -162,39 +166,38 @@ from fastapi import status
 # firestore_db = firestore.client()
 users = firestore_db.collection("users")
 
+# from datetime import datetime, timedelta, timezone
+
+TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "30"))
+
 @router.post("/plan/trial")
-async def activate_free_trial(
-    current_user: dict = Depends(get_current_user_from_cookie)
-):
-    # 1) Identify the user
+async def activate_free_trial(current_user: dict = Depends(get_current_user_from_cookie)):
     uid = current_user.get("userId")
     if not uid:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Not authenticated")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
-    # 2) Point at /users/{uid}/plan/trial
     trial_doc = users.document(uid).collection("plan").document("trial")
     snapshot = trial_doc.get()
-
-    # 3) If they've already used it, error out
     if snapshot.exists and snapshot.to_dict().get("hasUsed", False):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="Free trial already used")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Free trial already used")
 
-    # 4) Write hasUsed + date in subcollection
+    started = datetime.now(timezone.utc)
+    trial_end = started + timedelta(days=TRIAL_DAYS)
+
     trial_doc.set({
         "hasUsed": True,
-        "date": datetime.utcnow()
+        "date": started,       # aware datetime
+        "trialEnd": trial_end, # authoritative trial end
     }, merge=True)
 
-    # 5) ALSO mark them subscribed at the top‐level user doc
-    users.document(uid).update({"isSubscribed": True})
+    # (optional) mirror for cheap reads
+    users.document(uid).update({"trial": {"hasUsed": True, "date": started, "trialEnd": trial_end}})
 
-    return JSONResponse({
-        "hasUsed":     True,
-        "date":        datetime.utcnow().isoformat(),
-        "isSubscribed": True
-    })
+    # ✅ Recompute derived flag instead of forcing isSubscribed
+    _recompute_is_subscribed(uid)
+
+    return JSONResponse({"hasUsed": True, "date": started.isoformat(), "trialEnd": trial_end.isoformat()})
+
 
 @router.post("/webhook")
 async def webhook_received(request: Request):
@@ -213,21 +216,65 @@ async def webhook_received(request: Request):
         return JSONResponse({"error": "Invalid signature"}, status_code=400)
 
     event_type = event["type"]
-    event_data = event["data"]["object"]
-    stripe_customer_id = event_data.get("customer")
-    firebase_user, firebase_user_id = find_firestore_user(stripe_customer_id)
-    if not firebase_user:
-        logger.error(f"No Firestore user found for Stripe customer ID: {stripe_customer_id}")
-        return JSONResponse({"error": "User not found"}, status_code=404)
+    obj = event["data"]["object"]
 
+    # ── 1) Identify customer / user robustly ───────────────────────────────────
+    customer_id = obj.get("customer")
+
+    # Fallback via subscription lookup (invoice.*, checkout.session.* often have subscription)
+    if not customer_id:
+        sub_id = obj.get("subscription")
+        if sub_id:
+            def blocking_get_sub():
+                return stripe.Subscription.retrieve(sub_id)
+            try:
+                sub = await run_in_threadpool(blocking_get_sub)
+                customer_id = sub.get("customer")
+            except Exception as e:
+                logger.warning(f"Could not retrieve subscription {sub_id}: {e}")
+
+    # For checkout.session.* use client_reference_id and/or metadata.firebaseUserId
+    client_ref = obj.get("client_reference_id") if event_type.startswith("checkout.session") else None
+    meta_uid = (obj.get("metadata") or {}).get("firebaseUserId")
+
+    firebase_user, firebase_user_id = None, None
+
+    if customer_id:
+        firebase_user, firebase_user_id = find_firestore_user(customer_id)
+
+    if not firebase_user and client_ref:
+        snap = ref.document(client_ref).get()
+        if snap.exists:
+            firebase_user, firebase_user_id = snap.to_dict(), snap.id
+
+    if not firebase_user and meta_uid:
+        snap = ref.document(meta_uid).get()
+        if snap.exists:
+            firebase_user, firebase_user_id = snap.to_dict(), snap.id
+
+    if not firebase_user:
+        # Do NOT return 404 — Stripe will retry forever.
+        logger.error(
+            f"No Firestore user found (event={event_type}) "
+            f"customer={customer_id} client_ref={client_ref} meta_uid={meta_uid}"
+        )
+        return JSONResponse({"received": True})  # 200 OK to stop retries
+
+    # ── 2) Route events ───────────────────────────────────────────────────────
     if event_type == "customer.subscription.created":
-        handle_subscription_created(event_data, firebase_user, firebase_user_id)
+        handle_subscription_created(obj, firebase_user, firebase_user_id, request=request)
     elif event_type == "customer.subscription.deleted":
-        handle_subscription_deleted(event_data, firebase_user_id)
+        handle_subscription_deleted(obj, firebase_user_id)
     elif event_type == "invoice.payment_failed":
-        handle_payment_failed(event_data, firebase_user_id)
+        handle_payment_failed(obj, firebase_user_id)
+    elif event_type == "customer.subscription.updated":
+        handle_subscription_updated(obj, firebase_user_id)
+    elif event_type == "checkout.session.completed":
+        # Optional: you can mark them as subscribed or just rely on recompute
+        pass
 
     return JSONResponse({"status": "success"})
+
 
 @router.post("/unsubscribe")
 async def unsubscribe(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
@@ -255,7 +302,7 @@ async def unsubscribe(request: Request, current_user: dict = Depends(get_current
             def blocking_delete_subscription(subscription_id):
                 return stripe.Subscription.delete(subscription_id)
             await run_in_threadpool(blocking_delete_subscription, subscription.id)
-        doc_ref.update({"isSubscribed": False})
+        _recompute_is_subscribed(firebase_user_id)  # ✅ derived from Stripe + trial
         if "user" in request.session:
             request.session["user"]["isSubscribed"] = False
         return JSONResponse({"message": "Successfully unsubscribed"})

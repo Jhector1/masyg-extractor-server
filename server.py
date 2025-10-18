@@ -10,8 +10,13 @@ Run with an ASGI server such as uvicorn:
 import os
 from datetime import datetime, timedelta
 
+# Initialize Firebase early.
+from masyg_extractor.firebase.firebase_init import firebase_init
+firebase_init()
 from firebase_admin import firestore
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from masyg_extractor.services.subscription_services import _recompute_is_subscribed
 
 ENV = os.getenv("FAST_API_ENV", "development").lower()
 import logging
@@ -51,9 +56,6 @@ def log_mem(step):
 log_mem("firebase init")
 
 
-# Initialize Firebase early.
-from masyg_extractor.firebase.firebase_init import firebase_init
-firebase_init()
 # server.py
 #!/usr/bin/env python
 import os, asyncio, uuid, urllib.parse, logging
@@ -148,21 +150,70 @@ register_routers(inner)
 
 # Firestore + daily job (unchanged)
 db = firestore.client()
+# def expire_free_trials():
+#   cutoff = datetime.utcnow() - timedelta(minutes=2)
+#   for user_snap in db.collection("users").stream():
+#     uid = user_snap.id
+#     trial_ref = db.collection("users").document(uid).collection("plan").document("trial")
+#     snap = trial_ref.get()
+#     if not snap.exists: continue
+#     trial = snap.to_dict()
+#     if trial.get("hasUsed") and trial.get("date") <= cutoff:
+#       db.collection("users").document(uid).update({"isSubscribed": False})
+#   print("✅ Expired any >30-day trials.")
+from datetime import timezone
+
+from datetime import timezone, timedelta
+
+TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "30"))
+
 def expire_free_trials():
-  cutoff = datetime.utcnow() - timedelta(days=30)
+  now = datetime.now(timezone.utc)
+  print(f"[expire_free_trials] sweep @ {now.isoformat()}", flush=True)
+
   for user_snap in db.collection("users").stream():
     uid = user_snap.id
-    trial_ref = db.collection("users").document(uid).collection("plan").document("trial")
-    snap = trial_ref.get()
-    if not snap.exists: continue
-    trial = snap.to_dict()
-    if trial.get("hasUsed") and trial.get("date") <= cutoff:
-      db.collection("users").document(uid).update({"isSubscribed": False})
-  print("✅ Expired any >30-day trials.")
+    user_ref = db.collection("users").document(uid)
+    trial_ref = user_ref.collection("plan").document("trial")
+
+    t_snap = trial_ref.get()
+    if not t_snap.exists:
+      # still recompute for paid users even if no trial doc
+      _recompute_is_subscribed(uid)
+      continue
+
+    t = t_snap.to_dict() or {}
+    start_dt = t.get("date")
+    end_dt = t.get("trialEnd")
+
+    # normalize to aware UTC
+    if isinstance(start_dt, datetime) and start_dt.tzinfo is None:
+      start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if isinstance(end_dt, datetime) and end_dt.tzinfo is None:
+      end_dt = end_dt.replace(tzinfo=timezone.utc)
+
+    # if trialEnd missing, derive from start
+    if not end_dt and isinstance(start_dt, datetime):
+      end_dt = start_dt + timedelta(days=TRIAL_DAYS)
+
+    # optional: mark an explicit flag when trial is over (for UI/debug)
+    if end_dt and end_dt <= now and not t.get("trialExpired"):
+      trial_ref.set({"trialExpired": True}, merge=True)
+
+    # ✅ key: never force isSubscribed here; always recompute from trial+Stripe
+    _recompute_is_subscribed(uid)
+
+  print("✅ [expire_free_trials] recompute sweep done.", flush=True)
+
+
 
 @inner.on_event("startup")
 def _startup():
   sch = AsyncIOScheduler(timezone="America/Chicago")
+  from datetime import datetime as dt, timezone as tz
+
+  # sch.add_job(expire_free_trials, "date", run_date=dt.now(tz.utc), id="trial_expire_boot", replace_existing=True)
+
   sch.add_job(expire_free_trials, "cron", hour=0, minute=0)
   sch.start()
 
@@ -201,7 +252,10 @@ async def disconnect(sid):
 # ──────────────────────────────────────────────────────────────────────────────
 # Export ONE ASGI app: Socket.IO wrapped around FastAPI
 # ──────────────────────────────────────────────────────────────────────────────
-app = __import__("socketio").ASGIApp(sio, other_asgi_app=inner)
+# app = __import__("socketio").ASGIApp(sio, other_asgi_app=inner)
+_socketio_app = __import__("socketio").ASGIApp(sio, socketio_path="socket.io")
+inner.mount("/ws", _socketio_app)
+app = inner
 
 if __name__ == "__main__":
   import uvicorn

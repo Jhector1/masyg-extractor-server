@@ -4,68 +4,154 @@ import stripe
 from firebase_admin import firestore
 from fastapi import Request, HTTPException
 from starlette.concurrency import run_in_threadpool
-
+import os
 from masyg_extractor.services.my_log import logger
 # Initialize Firestore client and set the collection reference for users.
 firestore_db = firestore.client()
 ref = firestore_db.collection("users")  # Firestore collection for user documents
 
-def update_firestore_user(user_id: str, is_subscribed: bool, has_used_trial: bool = None, request: Request = None):
+
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Tuple
+
+ACTIVEISH = {"active", "trialing", "past_due", "unpaid"}  # treat these as subscribed
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    if not isinstance(dt, datetime):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+def _fetch_trial(user_id: str) -> Tuple[bool, Optional[datetime]]:
     """
-    Update Firestore user subscription status.
+    Reads /users/{uid}/plan/trial and returns (has_used, trial_end).
+    trial_end is either saved 'trialEnd' or computed from 'date' + TRIAL_DAYS if present.
     """
-    update_data = {'isSubscribed': is_subscribed}
+    TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "7"))
+    t_ref = ref.document(user_id).collection("plan").document("trial")
+    snap = t_ref.get()
+    if not snap.exists:
+        return False, None
+    t = snap.to_dict() or {}
+    has_used = bool(t.get("hasUsed"))
+    start = _ensure_aware(t.get("date"))
+    end = _ensure_aware(t.get("trialEnd"))
+    if not end and start:
+        end = start + timedelta(days=TRIAL_DAYS)
+    return has_used, end
+
+def _trial_active(user_id: str) -> bool:
+    has_used, trial_end = _fetch_trial(user_id)
+    return bool(has_used and trial_end and trial_end > _utcnow())
+
+def _stripe_active(user_doc: dict) -> bool:
+    status = (user_doc.get("subscriptionStatus") or "").lower()
+    if status not in ACTIVEISH:
+        return False
+    cancel_at = _ensure_aware(user_doc.get("cancelAt"))
+    # if a cancel date exists, it must be in the future
+    return bool(not cancel_at or _utcnow() < cancel_at)
+
+def _recompute_is_subscribed(user_id: str) -> bool:
+    uref = ref.document(user_id)
+    usnap = uref.get()
+    if not usnap.exists:
+        return False
+    udoc = usnap.to_dict() or {}
+    value = _trial_active(user_id) or _stripe_active(udoc)
+    uref.update({"isSubscribed": value, "isSubscribedUpdatedAt": _utcnow()})
+    return value
+
+
+
+
+
+def update_firestore_user(user_id: str, is_subscribed: bool = None, has_used_trial: bool = None, request: Request = None):
+    """
+    Update Firestore user fields and then recompute derived isSubscribed.
+    Only write direct isSubscribed if you truly want to force it (generally avoid).
+    """
+    updates = {}
     if has_used_trial is not None:
-        update_data['hasUsedTrial'] = has_used_trial
+        updates['hasUsedTrial'] = has_used_trial
         if request and hasattr(request, "session") and "user" in request.session:
             request.session["user"]["hasUsedTrial"] = has_used_trial
-    doc_ref = ref.document(user_id)
-    print(doc_ref)
-    doc_ref.update(update_data)
-    #jfhfh
+
+    # Avoid forcing isSubscribed here unless absolutely necessary.
+    if updates:
+        ref.document(user_id).update(updates)
+
+    # Always recompute derived value from Stripe + trial
+    _recompute_is_subscribed(user_id)
+
+
+
+
 
 
 def handle_subscription_created(data: dict, firebase_user: dict, firebase_user_id: str, request: Request = None):
-    """
-    Handle subscription creation events using Firestore.
-    """
-    stripe_customer_id = data.get("customer")
     price_id = data["items"]["data"][0]["price"]["id"]
+    status_ = (data.get("status") or "").lower()
     trial_start = data.get("trial_start")
     trial_end = data.get("trial_end")
-    status_ = data.get("status")
-    has_used_trial = firebase_user.get('hasUsedTrial', False)
 
-    if status_ == "trialing" and trial_start and trial_end:
-        if has_used_trial:
+    # Persist Stripe subscription fields on the user
+    ref.document(firebase_user_id).update({
+        "subscriptionId": data.get("id"),
+        "subscriptionStatus": status_,
+        "currentPeriodEnd": datetime.fromtimestamp(data.get("current_period_end", 0), tz=timezone.utc) if data.get("current_period_end") else None,
+        "cancelAt": datetime.fromtimestamp(data.get("cancel_at", 0), tz=timezone.utc) if data.get("cancel_at") else None,
+        "cancelAtPeriodEnd": bool(data.get("cancel_at_period_end")),
+        "priceId": price_id,
+        "subscriptionUpdatedAt": _utcnow(),
+    })
 
-            return {"error": "Free trial already used"}, 400
-        else:
-            logger.info(f"Free trial activated for user {firebase_user_id}.")
-            logger.info(f"Customer {stripe_customer_id} started a trial with price {price_id}.")
-            logger.info(f"Trial starts: {time.ctime(trial_start)}, ends: {time.ctime(trial_end)}")
-            update_firestore_user(firebase_user_id, is_subscribed=True, has_used_trial=True, request=request)
-    else:
-        logger.info(f"Plan {price_id} activated for user {firebase_user_id}.")
-        update_firestore_user(firebase_user_id, is_subscribed=True, request=request)
+    # If Stripe is providing a trial now, you may (optionally) write/mirror a trialEnd
+    if status_ == "trialing" and trial_end:
+        # Respect “already used trial” policy if you enforce it; otherwise just record state.
+        # If you mirror to the trial subdoc, do it here; otherwise skip.
+        pass
+
+    # Finally recompute
+    _recompute_is_subscribed(firebase_user_id)
     return {"message": "Subscription processed"}
 
 def handle_subscription_deleted(data: dict, firebase_user_id: str):
-    """
-    Handle subscription deletion events using Firestore.
-    """
-    logger.info(f"Subscription deleted for user {firebase_user_id}.")
-    update_firestore_user(firebase_user_id, is_subscribed=False)
+    # Mark Stripe subscription fields as cancelled, then recompute
+    ref.document(firebase_user_id).update({
+        "subscriptionStatus": "canceled",
+        "subscriptionId": None,
+        "cancelAt": None,
+        "cancelAtPeriodEnd": False,
+        "subscriptionUpdatedAt": _utcnow(),
+    })
+    _recompute_is_subscribed(firebase_user_id)
     return {"message": "Subscription deleted"}
 
 def handle_payment_failed(data: dict, firebase_user_id: str):
-    """
-    Handle payment failure events using Firestore.
-    """
-    logger.info(f"Payment failed for user {firebase_user_id}.")
+    # Do NOT immediately set isSubscribed=False. Let status changes (updated/deleted) drive it.
+    ref.document(firebase_user_id).update({"lastPaymentFailedAt": _utcnow()})
+    _recompute_is_subscribed(firebase_user_id)
     notify_user_of_payment_failure(firebase_user_id)
-    update_firestore_user(firebase_user_id, is_subscribed=False)
     return {"message": "Payment failure handled"}
+
+def handle_subscription_updated(data: dict, firebase_user_id: str):
+    status_ = (data.get("status") or "").lower()
+    ref.document(firebase_user_id).update({
+        "subscriptionStatus": status_,
+        "currentPeriodEnd": datetime.fromtimestamp(data.get("current_period_end", 0), tz=timezone.utc) if data.get("current_period_end") else None,
+        "cancelAt": datetime.fromtimestamp(data.get("cancel_at", 0), tz=timezone.utc) if data.get("cancel_at") else None,
+        "cancelAtPeriodEnd": bool(data.get("cancel_at_period_end")),
+        "subscriptionUpdatedAt": _utcnow(),
+    })
+    _recompute_is_subscribed(firebase_user_id)
+
+
+
+
+
 
 def notify_user_of_payment_failure(user_id: str):
     """
