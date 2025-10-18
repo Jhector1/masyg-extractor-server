@@ -137,7 +137,12 @@ inner.add_middleware(
   allow_methods=["*"],
   allow_headers=["*"],
 )
-
+stripe.set_app_info(
+    'stripe-samples/checkout-single-subscription',
+    version='0.0.1',
+    url='https://github.com/stripe-samples/checkout-single-subscription'
+)
+stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
 # Register all HTTP routes (including /extractor/* that emit progress)
 register_routers(inner)
 
