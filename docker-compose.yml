@@ -7,9 +7,9 @@ services:
     env_file: .env
     restart: unless-stopped
     networks: [public]
-    ports: ["6000:6000"]    # publish to host; remove if you use a reverse proxy
+    ports: ["5000:5000"]    # publish to host; remove if you use a reverse proxy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6000/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/health"]
       interval: 20s
       timeout: 5s
       retries: 5

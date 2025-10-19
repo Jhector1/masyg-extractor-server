@@ -56,10 +56,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 # Expose port
-EXPOSE 6000
+EXPOSE 5000
 
 # Directly launch Uvicorn (the model is already installed)
-ENTRYPOINT ["sh","-c","uvicorn server:app --host 0.0.0.0 --port ${PORT:-6000}"]
+ENTRYPOINT ["sh","-c","uvicorn server:app --host 0.0.0.0 --port ${PORT:-5000}"]
 
 
 
