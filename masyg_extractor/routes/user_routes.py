@@ -788,37 +788,40 @@ async def login(request: Request, response: Response):
 
 
 @router.get("/current")
-async def get_current_user(
-    current_user: dict = Depends(get_current_user_from_cookie)
-):
+async def get_current_user(current_user: dict = Depends(get_current_user_from_cookie)):
     uid = current_user.get("userId")
     if not uid:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # 1) Refresh top‐level fields
-    user_doc = await asyncio.to_thread(users_coll.document(uid).get)
-    if not user_doc.exists:
+    doc = await asyncio.to_thread(users_coll.document(uid).get)
+    if not doc.exists:
         raise HTTPException(status_code=404, detail="User not found")
 
-    data = user_doc.to_dict()
-    current_user.update({
+    data = doc.to_dict() or {}
+    # Ensure trial mirror is present; if not, rebuild minimal structure from subdoc
+    trial = data.get("trial") or {}
+    if not trial.get("trialEnd"):
+        tdoc = await asyncio.to_thread(
+            users_coll.document(uid).collection("plan").document("trial").get
+        )
+        if tdoc.exists:
+            t = tdoc.to_dict()
+            trial = {
+                "hasUsed": bool(t.get("hasUsed")),
+                "date": t.get("date").isoformat() if isinstance(t.get("date"), datetime) else None,
+                "trialEnd": t.get("trialEnd").isoformat() if isinstance(t.get("trialEnd"), datetime) else None,
+                "trialExpired": False,  # client can compute, but this keeps shape stable
+            }
+
+    return {"user": {
+        "userId": uid,
         "username": data.get("username"),
-        "email":    data.get("email"),
+        "email": data.get("email"),
         "isSubscribed": data.get("isSubscribed", False),
-    })
-
-    # 2) Refresh trial status from subcollection
-    trial_ref = users_coll.document(uid).collection("plan").document("trial")
-    trial_snap = await asyncio.to_thread(trial_ref.get)
-
-    current_user["hasUsedTrial"] = False
-    current_user["trialDate"]    = None
-    if trial_snap.exists:
-        tdata = trial_snap.to_dict()
-        current_user["hasUsedTrial"] = bool(tdata.get("hasUsed", False))
-        current_user["trialDate"]    = tdata.get("date")
-
-    return {"user": current_user}
+        "subscriptionStatus": data.get("subscriptionStatus", "none"),
+        "cancelAt": data.get("cancelAt"),
+        "trial": trial,
+    }}
 
 
 @router.post("/refresh-token")

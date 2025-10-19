@@ -54,15 +54,74 @@ def _stripe_active(user_doc: dict) -> bool:
     # if a cancel date exists, it must be in the future
     return bool(not cancel_at or _utcnow() < cancel_at)
 
-def _recompute_is_subscribed(user_id: str) -> bool:
-    uref = ref.document(user_id)
-    usnap = uref.get()
-    if not usnap.exists:
-        return False
-    udoc = usnap.to_dict() or {}
-    value = _trial_active(user_id) or _stripe_active(udoc)
-    uref.update({"isSubscribed": value, "isSubscribedUpdatedAt": _utcnow()})
-    return value
+# masyg_extractor/services/subscription_services.py
+# from datetime import datetime, timezone
+# from firebase_admin import firestore
+# import stripe
+# from masyg_extractor.services.my_log import logger
+#
+db = firestore.client()
+users = db.collection("users")
+
+def _recompute_is_subscribed(uid: str) -> dict:
+    """
+    Derived truth:
+      True if (Stripe subscription active|trialing) OR (trialEnd in the future)
+    Mirrors a small 'trial' object into top-level for cheap reads.
+    """
+    user_ref = users.document(uid)
+    user = user_ref.get()
+    if not user.exists:
+        return {"isSubscribed": False}
+
+    data = user.to_dict() or {}
+    stripe_customer_id = data.get("stripeCustomerId")
+
+    # 1) Stripe side
+    stripe_active = False
+    stripe_status = None
+    cancel_at = None
+
+    if stripe_customer_id:
+        try:
+            subs = stripe.Subscription.list(customer=stripe_customer_id, status="all", limit=3)
+            for s in subs.auto_paging_iter():
+                # consider "active" or "trialing" as subscribed
+                if s.status in ("active", "trialing"):
+                    stripe_active = True
+                    stripe_status = s.status
+                    cancel_at = s.cancel_at and datetime.fromtimestamp(s.cancel_at, tz=timezone.utc)
+                    break
+        except Exception as e:
+            logger.warning(f"Stripe lookup failed for {uid}: {e}")
+
+    # 2) Trial side
+    trial_snap = user_ref.collection("plan").document("trial").get()
+    trial = trial_snap.to_dict() if trial_snap.exists else {}
+    trial_end = trial.get("trialEnd")
+    if isinstance(trial_end, datetime) and trial_end.tzinfo is None:
+        trial_end = trial_end.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    trial_active = bool(trial_end and trial_end > now)
+
+    # 3) Derived
+    is_sub = bool(stripe_active or trial_active)
+
+    patch = {
+        "isSubscribed": is_sub,
+        "subscriptionStatus": stripe_status or ("trialing" if trial_active else "none"),
+        "cancelAt": cancel_at.isoformat() if cancel_at else None,
+        # mirror (keeps client logic simple)
+        "trial": {
+            "hasUsed": bool(trial.get("hasUsed")),
+            "date": trial.get("date").isoformat() if isinstance(trial.get("date"), datetime) else None,
+            "trialEnd": trial_end.isoformat() if trial_end else None,
+            "trialExpired": False if trial_active else bool(trial.get("hasUsed")),
+        },
+    }
+    user_ref.set(patch, merge=True)
+    return patch
 
 
 

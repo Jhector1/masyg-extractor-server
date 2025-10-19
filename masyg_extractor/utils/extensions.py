@@ -8,7 +8,7 @@ ENV = os.getenv("FAST_API_ENV", "development").lower()
 # Build a precise allowlist of browser origins (scheme + host + port)
 def _allowed_origins():
     # Always include common local dev origins
-    allow = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    allow = []
 
     # Include CLIENT_URL if set and looks like a full origin
     client = (os.getenv("CLIENT_URL") or "").strip()
