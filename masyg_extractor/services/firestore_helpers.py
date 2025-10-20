@@ -1,6 +1,10 @@
 import asyncio
 from firebase_admin import firestore
 
+from masyg_extractor.firebase.firebase_init import firebase_init
+
+firebase_init()
+
 # Create a Firestore client once (or create it as needed).
 firestore_db = firestore.client()
 

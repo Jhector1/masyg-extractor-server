@@ -6,6 +6,7 @@ import base64
 import io
 import os
 from datetime import datetime
+from pprint import pprint
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request, UploadFile, File, Depends, HTTPException, status
@@ -24,6 +25,7 @@ from masyg_extractor.services.change_log_services import (
     handle_line_item_update,
     handle_group_delete,
 )
+from masyg_extractor.services.file_extractor_service import record_failed_file
 from masyg_extractor.services.processing import process_files_in_parallel
 from masyg_extractor.services.image_extractor_service import compress_file_blob
 from masyg_extractor.services.firestore_helpers import (
@@ -41,28 +43,32 @@ from masyg_extractor.services.dependencies import get_firebase_user, generate_gr
 from masyg_extractor.services.my_log import send_log, logger
 from masyg_extractor.utils.extensions import sio
 
-
 router = APIRouter(prefix="/extractor")
 
 EVENT_PROGRESS = "data-progress"
 
 from fastapi.encoders import jsonable_encoder
 
+
 def ok(content: dict | list, status_code: int = 200):
     """Safe JSONResponse that handles Firestore/Datetime types."""
     return JSONResponse(content=jsonable_encoder(content), status_code=status_code)
 
+
 @router.post("/extract-data", status_code=status.HTTP_201_CREATED)
 async def extract_data(
-    request: Request,
-    files: List[UploadFile] = File(...),
-    current_user: dict = Depends(get_current_user_from_cookie),
-    progress_logger: ExtractorProgressLog = Depends(get_extractor_progress_logger),
+        request: Request,
+        files: List[UploadFile] = File(...),
+        current_user: dict = Depends(get_current_user_from_cookie),
+        progress_logger: ExtractorProgressLog = Depends(get_extractor_progress_logger),
 ):
     """
     Upload N files, extract, parse with GPT, compress & attach, and store records in Firestore.
     Emits per-file progress with `file_id` and overall progress with `file_id=None`.
     """
+    failed_files_ids: List[str] = []
+    # failed = 0
+
     client_id = request.session.get("client_id") or "Guest"
     user_id = current_user.get("userId")
     if not user_id:
@@ -101,6 +107,11 @@ async def extract_data(
         res = results.get(orig_idx)
         if not res:
             failed += 1
+
+            fid = await record_failed_file(user_id, group_id, uf.filename, "Pipeline returned no result",
+                                           stage="pipeline")
+            failed_files_ids.append(fid)
+
             # best-effort user log
             asyncio.create_task(send_log(f"❌ {uf.filename} failed to process.", user_room=client_id))
             continue
@@ -108,9 +119,15 @@ async def extract_data(
         parsed = res.get("parsed_content")
         if isinstance(parsed, dict) and "error" in parsed:
             failed += 1
+            fid = await record_failed_file(
+                user_id, group_id, uf.filename,
+                parsed.get("error", "Unknown error"),
+                stage="gpt_parse"
+            )
+            failed_files_ids.append(fid)
             asyncio.create_task(
                 send_log(
-                    f'❌ {uf.filename} failed: {parsed.get("error","Unknown error")}. '
+                    f'❌ {uf.filename} failed: {parsed.get("error", "Unknown error")}. '
                     f"Please submit a valid invoice, bill, or receipt.",
                     user_room=client_id,
                 )
@@ -134,6 +151,25 @@ async def extract_data(
 
     if failed >= len(file_buffers):
         # Everyone failed → push to 100 overall and return error
+        # NEW: persist the group + failures so user can see what failed
+        firestore_client = firestore.client()
+        group_doc_ref = (
+            firestore_client.collection("users")
+            .document(user_id)
+            .collection("groups")
+            .document(group_id)
+        )
+        fail_meta = {
+            "status": "failed",
+            "upload_time": datetime.now().isoformat(),  # or SERVER_TIMESTAMP if you prefer
+            "file_count": 0,
+            "group_name": group_id,
+            "isViewed": False,
+            "failed_count": failed,
+            "failed_files": failed_files_ids,
+        }
+        group_doc_ref.set({"metadata": fail_meta}, merge=True)
+
         await sio.emit(EVENT_PROGRESS, {"progress": 100, "file_id": None}, room=client_id)
         return {"error": "❌ Files Processing Failed"}
 
@@ -152,6 +188,14 @@ async def extract_data(
         "isViewed": False,
     }
     group_doc_ref.set({"metadata": metadata})
+
+    # after: group_doc_ref.set({"metadata": metadata})
+    if failed > 0:
+        # track how many failed and which file doc ids we wrote
+        metadata["failed_count"] = failed
+        metadata["failed_files"] = failed_files_ids
+        group_doc_ref.set({"metadata": metadata}, merge=True)
+
     if files_metadata:
         metadata["files"] = files_metadata
         group_doc_ref.set({"metadata": metadata}, merge=True)
@@ -171,8 +215,8 @@ async def extract_data(
 
 @router.post("/update-change-log")
 async def update_change_log(
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -230,8 +274,34 @@ import asyncio
 import logging
 
 # logger = logging.getLogger(__name__)
+# from datetime import datetime, timezone
 
-TrashMode = Literal["true", "false", "all"]
+def _fs_to_jsonable(v):
+    # Firestore Timestamp -> ISO
+    if hasattr(v, "to_datetime"):
+        try:
+            dt = v.to_datetime()
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.isoformat()
+        except Exception:
+            return str(v)
+    # Python datetime -> ISO
+    if isinstance(v, datetime):
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        return v.isoformat()
+    return v
+
+def _deep_jsonable(obj):
+    if isinstance(obj, dict):
+        return {k: _deep_jsonable(_fs_to_jsonable(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_deep_jsonable(x) for x in obj]
+    return _fs_to_jsonable(obj)
+
+StatusMode = Literal["ok", "failed", "all"]
+TrashMode = Literal["true", "false", "all"]  # you already had this earlier
 
 @router.get("/get-user-data")
 async def get_user_data(
@@ -239,7 +309,15 @@ async def get_user_data(
     current_user: dict = Depends(get_current_user_from_cookie),
     trashed: TrashMode = Query("false", regex="^(true|false|all)$"),
     hide_empty_groups: bool = Query(False),
+    file_status: StatusMode = Query("all", regex="^(ok|failed|all)$"),  # default to "all"
 ):
+    """
+    Returns groups with their files. Supports:
+      - trashed: "true" | "false" | "all"
+      - file_status: "ok" | "failed" | "all"
+      - hide_empty_groups: drop groups with no kept files after filters
+    Each returned file includes its actual 'status' field.
+    """
     user_id = current_user.get("userId")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID not found")
@@ -248,53 +326,92 @@ async def get_user_data(
         client = await get_firestore_client()
         groups_ref = client.collection("users").document(user_id).collection("groups")
 
-        # Fetch groups. Only pre-filter at DB when trashed=true (clear intent, faster).
+        # ---- Fetch groups (pre-filter on trashed when clear/fast)
         if trashed == "true":
             groups_q = groups_ref.where("metadata.trashed", "==", True)
             groups_docs = await asyncio.to_thread(lambda: list(groups_q.stream()))
-        else:
+        elif trashed == "false":
+            # We’ll filter out trashed groups in Python, so we can still show legacy docs.
+            groups_docs = await asyncio.to_thread(lambda: list(groups_ref.stream()))
+        else:  # trashed == "all"
             groups_docs = await asyncio.to_thread(lambda: list(groups_ref.stream()))
 
+        # ---- Helper to load files with pre-filtering where possible
+        async def load_files(group_ref):
+            files_ref = group_ref.collection("files")
+
+            # Build a base query
+            base_q = files_ref
+            need_post_filter_status = False
+            need_post_filter_trashed = False
+
+            if trashed == "true":
+                # Pre-filter on trashed if requested
+                base_q = base_q.where(filter=FieldFilter("trashed", "==", True))
+            elif trashed == "false":
+                # We'll exclude trashed in Python
+                need_post_filter_trashed = True
+
+            if file_status in ("ok", "failed"):
+                # Try pre-filter status
+                try:
+                    base_q = base_q.where(filter=FieldFilter("status", "==", file_status))
+                except Exception:
+                    # fallback to post-filter in Python (e.g., if schema mixed)
+                    need_post_filter_status = True
+            else:
+                need_post_filter_status = True  # "all" → no status filter at DB
+
+            try:
+                docs = await asyncio.to_thread(lambda: list(base_q.stream()))
+            except FailedPrecondition:
+                # Missing composite index; do naive scan and post-filter
+                docs = await asyncio.to_thread(lambda: list(files_ref.stream()))
+                need_post_filter_status = True
+                need_post_filter_trashed = (trashed == "false")
+
+            kept_docs = []
+            for d in docs:
+                data = d.to_dict() or {}
+                is_file_trashed = bool(data.get("trashed", False))
+                current_status = str(data.get("status", "ok")).lower()
+
+                if need_post_filter_trashed and is_file_trashed:
+                    continue
+
+                if need_post_filter_status:
+                    if file_status == "ok" and current_status == "failed":
+                        continue
+                    if file_status == "failed" and current_status != "failed":
+                        continue
+
+                kept_docs.append((d.id, data, is_file_trashed, current_status))
+
+            return kept_docs
+
         async def fetch_group_data(group_doc):
-            group_obj: Dict[str, Any] = {}
             group_data = group_doc.to_dict() or {}
             md: Dict[str, Any] = (group_data.get("metadata") or {}).copy()
 
-            # If trashed=false, drop GROUPS that are trashed (but keep metadata.files intact)
+            # If trashed=false, hide trashed groups entirely (but keep md.files intact when we do include groups)
             if trashed == "false" and bool(md.get("trashed", False)):
                 return None
 
-            group_obj["group_id"] = group_doc.id
-            group_obj["metadata"] = md  # keep metadata.files — UI may depend on it
+            # Keep metadata and group id
+            group_obj: Dict[str, Any] = {"group_id": group_doc.id, "metadata": md}
 
-            files_ref = group_doc.reference.collection("files")
-
-            # Load files subcollection
-            if trashed == "true":
-                # Only explicit trashed files
-                files_docs = await asyncio.to_thread(lambda: list(files_ref.where("trashed", "==", True).stream()))
-            else:
-                # all files, we’ll filter in Python (needed for trashed=false/all & legacy docs)
-                files_docs = await asyncio.to_thread(lambda: list(files_ref.stream()))
-
+            # Load files (with best-effort pre-filter)
             kept = 0
-            for file_doc in files_docs:
-                file_data = file_doc.to_dict() or {}
-                is_file_trashed = bool(file_data.get("trashed", False))
-
-                if trashed == "false" and is_file_trashed:
-                    # hide trashed files in normal view
-                    continue
-                # trashed == "all" includes everything; trashed == "true" was pre-filtered above
-
-                # Ensure legacy docs without 'trashed' still show up in non-trash views
-                group_obj[file_doc.id] = {
+            files = await load_files(group_doc.reference)
+            for file_id, file_data, is_file_trashed, current_status in files:
+                group_obj[file_id] = {
                     **file_data,
-                    "trashed": is_file_trashed  # normalize presence
+                    "trashed": is_file_trashed,
+                    "status": current_status,  # return the actual file's status
                 }
                 kept += 1
 
-            # Optionally hide empty groups (default False so selections still resolve)
+            # Optionally hide empty groups
             if hide_empty_groups and kept == 0:
                 return None
 
@@ -303,31 +420,42 @@ async def get_user_data(
         groups_list_raw = await asyncio.gather(*(fetch_group_data(doc) for doc in groups_docs))
         groups_list = [g for g in groups_list_raw if g is not None]
 
-        # Sort by upload_time; for trashed=true prefer trashAt if present
+        # ---- Sort: prefer trashAt for trashed view, else upload_time
         def sort_key(group):
             md = group.get("metadata", {}) if group else {}
             ts = md.get("trashAt") if trashed == "true" else md.get("upload_time")
             if not ts:
                 return float("inf")
             try:
-                dt = datetime.fromisoformat(ts)
+                # handle iso strings; if Firestore Timestamp sneaks in, convert to iso first
+                if hasattr(ts, "to_datetime"):
+                    dt = ts.to_datetime()
+                else:
+                    # tolerate "Z" suffix
+                    s = str(ts)
+                    if s.endswith("Z"):
+                        s = s[:-1] + "+00:00"
+                    dt = datetime.fromisoformat(s)
                 return abs((datetime.now() - dt).total_seconds())
             except Exception:
                 return float("inf")
 
         sorted_groups = sorted(groups_list, key=sort_key)
-        return JSONResponse(content={"uploads": sorted_groups}, status_code=200)
+        # At the end of get_user_data:
+        safe_groups = _deep_jsonable(sorted_groups)
+        return JSONResponse(content={"uploads": safe_groups}, status_code=200)
 
     except Exception:
         logger.exception("Failed to fetch user data")
         return JSONResponse(content={"error": "Failed to fetch user data."}, status_code=500)
 
 
+
 @router.delete("/delete-group/{group_id}")
 async def delete_group(
-    group_id: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str,
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -338,7 +466,8 @@ async def delete_group(
         ).collection("users").document(user_id).collection("groups").document(group_id)
         group_snapshot = await document_get(group_doc_ref)
         if not group_snapshot.exists:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No group found with group_id: {group_id}")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"No group found with group_id: {group_id}")
         await document_delete(group_doc_ref)
         return JSONResponse(content={"message": f"Group {group_id} deleted successfully."}, status_code=200)
     except Exception:
@@ -348,11 +477,11 @@ async def delete_group(
 
 @router.delete("/delete/groups/{group_id}/files/{file_name}/records/{record_key}")
 async def delete_record(
-    group_id: str,
-    file_name: str,
-    record_key: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str,
+        file_name: str,
+        record_key: str,
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     if not group_id or not file_name or not record_key:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required parameters")
@@ -363,7 +492,8 @@ async def delete_record(
 
     file_doc_ref = (
         await get_firestore_client()
-    ).collection("users").document(user_id).collection("groups").document(group_id).collection("files").document(file_name)
+    ).collection("users").document(user_id).collection("groups").document(group_id).collection("files").document(
+        file_name)
     file_snapshot = await document_get(file_doc_ref)
     if not file_snapshot.exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
@@ -397,11 +527,11 @@ async def delete_record(
 
 @router.put("/update/groups/{group_id}/files/{file_name}/records/{record_key}")
 async def update_record(
-    group_id: str,
-    file_name: str,
-    record_key: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str,
+        file_name: str,
+        record_key: str,
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -414,7 +544,8 @@ async def update_record(
 
     file_doc_ref = (
         await get_firestore_client()
-    ).collection("users").document(user_id).collection("groups").document(group_id).collection("files").document(file_name)
+    ).collection("users").document(user_id).collection("groups").document(group_id).collection("files").document(
+        file_name)
     if not (await document_get(file_doc_ref)).exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
 
@@ -424,9 +555,9 @@ async def update_record(
 
 @router.put("/update-group-name/{group_id}")
 async def update_group_name(
-    group_id: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str,
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -455,9 +586,9 @@ async def update_group_name(
 
 @router.delete("/delete-all-data/{email}")
 async def delete_all_data(
-    email: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        email: str,
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -497,8 +628,8 @@ async def delete_all_data(
 
 @router.patch("/update_view", status_code=200)
 async def update_view_status(
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     """
     Set metadata.isViewed=True for a given group (payload: {"groupId": "..."}).
@@ -525,25 +656,15 @@ async def update_view_status(
     return JSONResponse(content={"message": "Group view status updated successfully."}, status_code=200)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 from datetime import datetime, timedelta
 from fastapi import Path
 
 TRASH_TTL_DAYS = 30
 
+
 def _now_ts():
     return datetime.utcnow()
+
 
 def _ttl_ts(days: int = TRASH_TTL_DAYS):
     return _now_ts() + timedelta(days=days)
@@ -551,6 +672,7 @@ def _ttl_ts(days: int = TRASH_TTL_DAYS):
 
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
 
 def _ttl_utc_iso(days: int = TRASH_TTL_DAYS) -> str:
     return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
@@ -571,8 +693,10 @@ def _ttl_utc_iso(days: int = TRASH_TTL_DAYS) -> str:
 def _group_ref(client, user_id: str, group_id: str):
     return client.collection("users").document(user_id).collection("groups").document(group_id)
 
+
 def _file_ref(client, user_id: str, group_id: str, file_name: str):
     return _group_ref(client, user_id, group_id).collection("files").document(file_name)
+
 
 async def _assert_exists(doc_ref, not_found_msg="Document not found"):
     snap = await document_get(doc_ref)
@@ -580,14 +704,15 @@ async def _assert_exists(doc_ref, not_found_msg="Document not found"):
         raise HTTPException(status_code=404, detail=not_found_msg)
     return snap
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Move GROUP to Trash (soft delete)
 # ──────────────────────────────────────────────────────────────────────────────
 @router.post("/trash/group/{group_id}")
 async def trash_group(
-    group_id: str = Path(...),
-    request: Request = None,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str = Path(...),
+        request: Request = None,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id: raise HTTPException(400, "User ID not found")
@@ -600,7 +725,7 @@ async def trash_group(
     reason = body.get("reason") if isinstance(body, dict) else None
 
     client = await get_firestore_client()
-    gref =  _group_ref(client, user_id, group_id)
+    gref = _group_ref(client, user_id, group_id)
     gsnap = await _assert_exists(gref, f"No group found: {group_id}")
 
     # in trash_group / trash_file:
@@ -628,15 +753,16 @@ async def trash_group(
 
     return {"message": f"Group {group_id} moved to Trash until {exp.format()}."}
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Move FILE to Trash (soft delete)
 # ──────────────────────────────────────────────────────────────────────────────
 @router.post("/trash/file/{group_id}/{file_name}")
 async def trash_file(
-    group_id: str,
-    file_name: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str,
+        file_name: str,
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id: raise HTTPException(400, "User ID not found")
@@ -649,7 +775,7 @@ async def trash_file(
     reason = body.get("reason") if isinstance(body, dict) else None
 
     client = await get_firestore_client()
-    fref =  _file_ref(client, user_id, group_id, file_name)
+    fref = _file_ref(client, user_id, group_id, file_name)
     await _assert_exists(fref, "File not found")
 
     now = _now_ts()
@@ -667,19 +793,20 @@ async def trash_file(
 
     return {"message": f"File {file_name} moved to Trash until {exp.isoformat()}."}
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Restore GROUP from Trash
 # ──────────────────────────────────────────────────────────────────────────────
 @router.post("/trash/restore/group/{group_id}")
 async def restore_group(
-    group_id: str,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id: raise HTTPException(400, "User ID not found")
 
     client = await get_firestore_client()
-    gref =  _group_ref(client, user_id, group_id)
+    gref = _group_ref(client, user_id, group_id)
     await _assert_exists(gref, "Group not found")
 
     # untrash group
@@ -703,15 +830,16 @@ async def restore_group(
 
     return {"message": f"Group {group_id} restored from Trash."}
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Restore FILE from Trash
 # ──────────────────────────────────────────────────────────────────────────────
 # /trash/restore/file/{group_id}/{file_name}
 @router.post("/trash/restore/file/{group_id}/{file_name}")
 async def restore_file(
-    group_id: str,
-    file_name: str,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str,
+        file_name: str,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id: raise HTTPException(400, "User ID not found")
@@ -749,8 +877,8 @@ async def restore_file(
 # ──────────────────────────────────────────────────────────────────────────────
 @router.delete("/trash/permanent/group/{group_id}")
 async def purge_group_permanently(
-    group_id: str,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -795,26 +923,27 @@ async def purge_group_permanently(
 # ──────────────────────────────────────────────────────────────────────────────
 @router.delete("/trash/permanent/file/{group_id}/{file_name}")
 async def purge_file_permanently(
-    group_id: str,
-    file_name: str,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        group_id: str,
+        file_name: str,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id: raise HTTPException(400, "User ID not found")
 
     client = await get_firestore_client()
-    fref =  _file_ref(client, user_id, group_id, file_name)
+    fref = _file_ref(client, user_id, group_id, file_name)
     await _assert_exists(fref, "File not found")
     await document_delete(fref)
 
     # if group becomes empty, optionally delete it too
-    gref =  _group_ref(client, user_id, group_id)
+    gref = _group_ref(client, user_id, group_id)
     remaining = list(await stream_collection(gref.collection("files")))
     if len(remaining) == 0:
         await document_delete(gref)
         return {"message": f"File {file_name} deleted. Group {group_id} was empty and has been deleted."}
 
     return {"message": f"File {file_name} permanently deleted."}
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # List Trash (groups & files with time left)
@@ -823,6 +952,7 @@ async def purge_file_permanently(
 # top of file
 from datetime import datetime, timezone
 from typing import Optional, Any, Dict, List
+
 
 # ── time helpers ──────────────────────────────────────────────────────────────
 def _to_utc_aware(dt_like: Optional[object]) -> Optional[datetime]:
@@ -855,6 +985,7 @@ def _to_utc_aware(dt_like: Optional[object]) -> Optional[datetime]:
             return None
     return None
 
+
 def _days_left(expiry_like: Optional[object]) -> Optional[int]:
     exp = _to_utc_aware(expiry_like)
     if not exp:
@@ -862,9 +993,13 @@ def _days_left(expiry_like: Optional[object]) -> Optional[int]:
     now = datetime.now(timezone.utc)
     secs = (exp - now).total_seconds()
     return max(0, int(secs // 86400))
+
+
 def _to_iso(dt_like):
     d = _to_utc_aware(dt_like)
     return d.isoformat() if d else None
+
+
 # ── endpoint ─────────────────────────────────────────────────────────────────
 @router.get("/trash")
 async def list_trash(current_user: dict = Depends(get_current_user_from_cookie)):
@@ -908,8 +1043,8 @@ async def list_trash(current_user: dict = Depends(get_current_user_from_cookie))
             entry["files"].append({
                 "file_name": fdoc.id,
                 "trashed": True,
-                  "trashAt": _to_iso(fdata.get("trashAt")),
-    "trashExpiresAt": _to_iso(fdata.get("trashExpiresAt")),
+                "trashAt": _to_iso(fdata.get("trashAt")),
+                "trashExpiresAt": _to_iso(fdata.get("trashExpiresAt")),
                 "daysLeft": _days_left(fdata.get("trashExpiresAt")),
             })
         payload_by_gid[gdoc.id] = entry
@@ -970,32 +1105,13 @@ async def list_trash(current_user: dict = Depends(get_current_user_from_cookie))
     return {"trash": payload}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # import asyncio
 # from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 # from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, validator
+
 
 # from firebase_admin import firestore as admin_fs  # for DELETE_FIELD
 # from google.cloud import firestore  # client, SERVER_TIMESTAMP
@@ -1013,6 +1129,7 @@ class BulkFileItem(BaseModel):
     groupId: str = Field(..., min_length=1)
     fileId: str = Field(..., min_length=1)
 
+
 class BulkRequest(BaseModel):
     groups: List[str] = []
     files: List[BulkFileItem] = []
@@ -1023,16 +1140,20 @@ class BulkRequest(BaseModel):
     def _strip_groups(cls, v: str) -> str:
         return v.strip()
 
+
 class BulkResultEntry(BaseModel):
     status: str  # "ok" | "error"
     error: Optional[str] = None
 
+
 class BulkGroupResult(BulkResultEntry):
     id: str
+
 
 class BulkFileResult(BulkResultEntry):
     groupId: str
     fileId: str
+
 
 class BulkResponse(BaseModel):
     ok: bool = True
@@ -1045,14 +1166,18 @@ class BulkResponse(BaseModel):
 BATCH_LIMIT = 450  # stay safely under Firestore’s 500 write limit
 RETENTION_DAYS = 30
 
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
 
 def _trash_expiry() -> datetime:
     return _utcnow() + timedelta(days=RETENTION_DAYS)
 
+
 def _chunks[T](seq: List[T], size: int) -> List[List[T]]:
-    return [seq[i:i+size] for i in range(0, len(seq), size)]
+    return [seq[i:i + size] for i in range(0, len(seq), size)]
+
 
 # def _group_ref(client: firestore.Client, user_id: str, gid: str):
 #     return client.collection("users").document(user_id).collection("groups").document(gid)
@@ -1064,7 +1189,9 @@ async def _commit_batch(batch: firestore.WriteBatch):
     # Commit in a thread to avoid blocking the loop
     await asyncio.to_thread(batch.commit)
 
-async def _write_in_chunks(client: firestore.Client, ops: List[Tuple[str, Any, Dict[str, Any]]]) -> List[Tuple[Any, Optional[str]]]:
+
+async def _write_in_chunks(client: firestore.Client, ops: List[Tuple[str, Any, Dict[str, Any]]]) -> List[
+    Tuple[Any, Optional[str]]]:
     """
     ops: list of (kind, ref, data) where kind in {"update","set","delete"}
     returns: list of (ref, error_message_or_None)
@@ -1094,6 +1221,7 @@ async def _write_in_chunks(client: firestore.Client, ops: List[Tuple[str, Any, D
                 results.append((ref, err))
     return results
 
+
 async def _delete_group_tree(client: firestore.Client, user_id: str, gid: str) -> Optional[str]:
     """
     Deletes all files under a group then the group doc. Returns error string or None.
@@ -1121,11 +1249,6 @@ async def _delete_group_tree(client: firestore.Client, user_id: str, gid: str) -
         return str(e)
 
 
-
-
-
-
-
 # from __future__ import annotations
 #
 # import asyncio
@@ -1145,16 +1268,18 @@ async def _delete_group_tree(client: firestore.Client, user_id: str, gid: str) -
 
 TRASH_TTL_DAYS = 30
 
+
 def _utc_now():
     return datetime.now(timezone.utc)
+
 
 # def _trash_expiry():
 #     return _utc_now() + timedelta(days=TRASH_TTL_DAYS)
 
 @router.post("/trash/bulk")
 async def bulk_trash(
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     """
     Body:
@@ -1181,8 +1306,8 @@ async def bulk_trash(
     # ---- Trash groups (optionally cascade to files)
     for gid in groups:
         try:
-            gref = groups_ref.document(gid)              # <-- DocumentReference
-            gsnap = await document_get(gref)             # <-- Snapshot (awaited)
+            gref = groups_ref.document(gid)  # <-- DocumentReference
+            gsnap = await document_get(gref)  # <-- Snapshot (awaited)
             if not gsnap.exists:
                 results["groups"].append({"groupId": gid, "status": "error", "error": "not_found"})
                 continue
@@ -1222,7 +1347,7 @@ async def bulk_trash(
             if not fsnap.exists:
                 results["files"].append({"groupId": gid, "fileId": fid, "status": "error", "error": "not_found"})
                 continue
-            #integrations_ref
+            # integrations_ref
             now = _utc_now().isoformat()
             exp = _trash_expiry().isoformat()
             await document_update(fref, {
@@ -1240,10 +1365,11 @@ async def bulk_trash(
 # top of file
 from typing import Set
 
+
 @router.post("/trash/restore/bulk")
 async def bulk_restore(
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -1336,12 +1462,10 @@ async def bulk_restore(
     return {"results": results}
 
 
-
-
 @router.post("/trash/permanent/bulk")
 async def bulk_permanent(
-    request: Request,
-    current_user: dict = Depends(get_current_user_from_cookie),
+        request: Request,
+        current_user: dict = Depends(get_current_user_from_cookie),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -1413,4 +1537,3 @@ async def bulk_permanent(
             results["files"].append({"groupId": gid, "fileId": fid, "status": "error", "error": str(e)})
 
     return {"results": results}
-

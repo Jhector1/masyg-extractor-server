@@ -10,8 +10,12 @@ Run with an ASGI server such as uvicorn:
 import os
 from datetime import datetime, timedelta
 
+from apscheduler.triggers.cron import CronTrigger
+
 # Initialize Firebase early.
 from masyg_extractor.firebase.firebase_init import firebase_init
+from masyg_extractor.services.maintenance import purge_expired_trash, roll_failed_to_trash, expire_free_trials
+
 firebase_init()
 from firebase_admin import firestore
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -149,7 +153,7 @@ stripe.api_key = os.getenv('MASYG_EXTRACTOR_STRIPE_SECRET_KEY')
 register_routers(inner)
 
 # Firestore + daily job (unchanged)
-db = firestore.client()
+
 # def expire_free_trials():
 #   cutoff = datetime.utcnow() - timedelta(minutes=2)
 #   for user_snap in db.collection("users").stream():
@@ -165,56 +169,63 @@ from datetime import timezone
 
 from datetime import timezone, timedelta
 
-TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "30"))
 
-def expire_free_trials():
-  now = datetime.now(timezone.utc)
-  print(f"[expire_free_trials] sweep @ {now.isoformat()}", flush=True)
 
-  for user_snap in db.collection("users").stream():
-    uid = user_snap.id
-    user_ref = db.collection("users").document(uid)
-    trial_ref = user_ref.collection("plan").document("trial")
 
-    t_snap = trial_ref.get()
-    if not t_snap.exists:
-      # still recompute for paid users even if no trial doc
-      _recompute_is_subscribed(uid)
-      continue
 
-    t = t_snap.to_dict() or {}
-    start_dt = t.get("date")
-    end_dt = t.get("trialEnd")
+# @inner.on_event("startup")
+# def _startup():
+#   sch = AsyncIOScheduler(timezone="America/Chicago")
+#   from datetime import datetime as dt, timezone as tz
+#
+#   # sch.add_job(expire_free_trials, "date", run_date=dt.now(tz.utc), id="trial_expire_boot", replace_existing=True)
+#
+#   sch.add_job(expire_free_trials, "cron", hour=0, minute=0)
+#   sch.start()
+RUN_SCHEDULER = os.getenv("IS_SCHEDULER", "0") == "1"  # only one instance should schedule
 
-    # normalize to aware UTC
-    if isinstance(start_dt, datetime) and start_dt.tzinfo is None:
-      start_dt = start_dt.replace(tzinfo=timezone.utc)
-    if isinstance(end_dt, datetime) and end_dt.tzinfo is None:
-      end_dt = end_dt.replace(tzinfo=timezone.utc)
+def _wrap_async(coro_func):
+  # APScheduler 3.x runs callables; we wrap to schedule the coroutine on the event loop.
+  def runner():
+    asyncio.get_event_loop().create_task(coro_func())
 
-    # if trialEnd missing, derive from start
-    if not end_dt and isinstance(start_dt, datetime):
-      end_dt = start_dt + timedelta(days=TRIAL_DAYS)
-
-    # optional: mark an explicit flag when trial is over (for UI/debug)
-    if end_dt and end_dt <= now and not t.get("trialExpired"):
-      trial_ref.set({"trialExpired": True}, merge=True)
-
-    # ✅ key: never force isSubscribed here; always recompute from trial+Stripe
-    _recompute_is_subscribed(uid)
-
-  print("✅ [expire_free_trials] recompute sweep done.", flush=True)
-
+  return runner
 
 
 @inner.on_event("startup")
 def _startup():
+  if not RUN_SCHEDULER:
+    return
+
   sch = AsyncIOScheduler(timezone="America/Chicago")
-  from datetime import datetime as dt, timezone as tz
 
-  # sch.add_job(expire_free_trials, "date", run_date=dt.now(tz.utc), id="trial_expire_boot", replace_existing=True)
+  # example existing job
+  sch.add_job(_wrap_async(expire_free_trials), trigger=CronTrigger(hour=0, minute=0),
+              id="trial_expire_daily", replace_existing=True, coalesce=True,
+              misfire_grace_time=3600, max_instances=1)
 
-  sch.add_job(expire_free_trials, "cron", hour=0, minute=0)
+  # 03:00 CT – move failed → trash
+  sch.add_job(
+    _wrap_async(roll_failed_to_trash),
+    trigger=CronTrigger(hour=3, minute=0),
+    id="roll_failed_to_trash",
+    replace_existing=True,
+    coalesce=True,
+    misfire_grace_time=3600,
+    max_instances=1,
+  )
+
+  # 04:00 CT – purge expired trash
+  sch.add_job(
+    _wrap_async(purge_expired_trash),
+    trigger=CronTrigger(hour=4, minute=0),
+    id="purge_expired_trash",
+    replace_existing=True,
+    coalesce=True,
+    misfire_grace_time=3600,
+    max_instances=1,
+  )
+
   sch.start()
 
 # ──────────────────────────────────────────────────────────────────────────────

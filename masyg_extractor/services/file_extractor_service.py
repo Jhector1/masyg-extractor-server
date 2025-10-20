@@ -17,7 +17,9 @@ import pytesseract
 import logging
 import re
 import json
+from firebase_admin import firestore as admin_fs
 
+from masyg_extractor.services.firestore_helpers import get_firestore_client
 from masyg_extractor.services.my_log import logger, send_log
 from masyg_extractor.services.progress_log import ExtractorProgressLog
 from masyg_extractor.utils.extensions import sio
@@ -414,3 +416,49 @@ async def _emit_progress_resilient(
         # Swallow errors to avoid crashing the pipeline on progress-only failures.
         logger.debug("Progress emit fallback failed; continuing without emitting.")
 # safe_emit_progress
+
+
+
+# ── record a failed file into Firestore (no refactor, safe to call anywhere) ──
+async def record_failed_file(
+    user_id: str,
+    group_id: str,
+    filename: str,
+    error_message: str,
+    *,
+    stage: str | None = None,
+) -> str:
+    """Creates/merges a file doc with status=failed so UI can show it."""
+    from masyg_extractor.utils.filename_utils import sanitize_generate_unique_filename
+    client = await get_firestore_client()
+    file_id = sanitize_generate_unique_filename(filename)
+
+    fref = (
+        client.collection("users")
+        .document(user_id)
+        .collection("groups")
+        .document(group_id)
+        .collection("files")
+        .document(file_id)
+    )
+
+    data = {
+        # "status": "failed",
+        # "error": error_message,
+        # "stage": stage,                       # e.g., "pipeline", "text_extraction", "gpt_parse"
+        # "original_filename": filename,
+        # "trashed": False,
+        # "createdAt": admin_fs.SERVER_TIMESTAMP,
+
+        "status": "failed",
+        "original_filename": filename,
+        "error": error_message,
+        "stage": stage,
+        "trashed": False,
+        "createdAt":  admin_fs.SERVER_TIMESTAMP,
+        "updatedAt":  admin_fs.SERVER_TIMESTAMP,
+    }
+
+    # use set(..., merge=True) to avoid requiring an existing doc
+    await asyncio.to_thread(fref.set, data, True)
+    return file_id
