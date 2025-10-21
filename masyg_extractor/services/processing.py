@@ -421,7 +421,7 @@ async def _process_one(
         if not (text and text.strip()):
             logger.warning(f"No text extracted: {uploaded_file.filename}")
             await _finalize_to_100(progress_logger, per_file, file_id, "No text extracted")
-            return idx, file_id, {"error": "Text extraction failed"}
+            return idx, file_id, {"error": "Text extraction failed", "stage": "Extracting text"}
 
         # GPT PROCESS
         async def _run_gpt():
@@ -434,7 +434,7 @@ async def _process_one(
         parsed_content = await _gpt_stage_with_progress(text, progress_logger, per_file, file_id, run_gpt=_run_gpt)
         if not parsed_content or len(parsed_content.get("line_items", [])) == 0:
             await _finalize_to_100(progress_logger, per_file, file_id, "Parsing failed")
-            return idx, file_id, {"error": "error while processing file"}
+            return idx, file_id, {"error": "error while processing file", "stage": "Parsing failed"}
 
         logger.info(f"Final successful extractor used: {extractor_used}")
 
@@ -461,7 +461,7 @@ async def _process_one(
         logger.exception("File task failed")
         # Even on unexpected crash, finish the bar so it never hangs mid-way
         await _finalize_to_100(progress_logger, per_file, file_id, "Failed")
-        return idx, file_id, {"error": str(e)}
+        return idx, file_id, {"error": str(e), "stage": "File task failed"}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Batch orchestrator

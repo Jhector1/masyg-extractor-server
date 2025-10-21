@@ -122,7 +122,7 @@ async def extract_data(
             fid = await record_failed_file(
                 user_id, group_id, uf.filename,
                 parsed.get("error", "Unknown error"),
-                stage="gpt_parse"
+                stage=parsed.get("stage") or "parsing"
             )
             failed_files_ids.append(fid)
             asyncio.create_task(
