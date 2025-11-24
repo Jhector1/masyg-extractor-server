@@ -331,113 +331,103 @@ async def get_items(request: Request, current_user: dict = Depends(get_current_u
 
 @router.get("/get-customers")
 async def get_customers(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
-    """
-    Fetches all customers from QuickBooks, returning only the DisplayName as Name and Id.
-    """
     try:
         user_Id = current_user.get("userId")
-
-        # get_entities returns a JSONResponse containing a list of customer objects.
         response = await get_entities(request, "Customer", user_Id)
-        # Parse the JSONResponse body into a Python list.
-        customer_entities = json.loads(response.body)
-        # Filter out only the DisplayName as Name and Id.
-        filtered_customers = [
-            {"Name": customer.get("DisplayName"), "Id": customer.get("Id")}
-            for customer in customer_entities
+
+        # Accept both JSONResponse and list
+        if hasattr(response, "body"):
+            raw = response.body
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="replace")
+            customer_entities = json.loads(raw or "[]")
+        else:
+            customer_entities = response  # already a list/dict
+
+        filtered = [
+            {"Name": c.get("DisplayName"), "Id": c.get("Id")}
+            for c in (customer_entities or [])
+            if isinstance(c, dict)
         ]
-        return JSONResponse(content=filtered_customers, status_code=status.HTTP_200_OK)
+        return JSONResponse(content=filtered, status_code=status.HTTP_200_OK)
+
     except Exception as e:
-        logger.error(f"Error processing customers: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error processing customers")  # full stack trace
+        raise HTTPException(status_code=500, detail="Failed to fetch customers")
 
 
 @router.get("/get-vendors")
 async def get_vendors(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
-    """
-    Fetches all vendors from QuickBooks.
-    """
     try:
         user_Id = current_user.get("userId")
-
         response = await get_entities(request, "Vendor", user_Id)
-        customer_entities = json.loads(response.body)
 
-        filtered_customers = [
-            {"Name": customer.get("DisplayName"), "Id": customer.get("Id")}
-            for customer in customer_entities
+        if hasattr(response, "body"):
+            raw = response.body
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="replace")
+            vendor_entities = json.loads(raw or "[]")
+        else:
+            vendor_entities = response
+
+        filtered = [
+            {"Name": v.get("DisplayName"), "Id": v.get("Id")}
+            for v in (vendor_entities or [])
+            if isinstance(v, dict)
         ]
+        return JSONResponse(content=filtered, status_code=status.HTTP_200_OK)
 
-        return JSONResponse(content=filtered_customers, status_code=status.HTTP_200_OK)
-    except Exception as e:
-        logger.error(f"Error processing vendors: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Error processing vendors")
+        raise HTTPException(status_code=500, detail="Failed to fetch vendors")
 
 
 @router.get("/get-accounts")
-async def get_accounts(request: Request, current_user: dict = Depends(get_current_user_from_cookie),  account_types: str = None):
-    """
-    Fetches accounts from QuickBooks, returning only the Name and Id.
+async def get_accounts(
+    request: Request,
+    current_user: dict = Depends(get_current_user_from_cookie),
+    account_types: str | None = None
+):
+    # masyg_extractor/integrations/quickbooks/quickbooks_client.py
+    import os
+    QUICKBOOKS_BASE = os.getenv("QUICKBOOKS_URL")
 
-    Optional Query Parameter:
-    - account_types: A comma-separated list of account types to filter by.
-      For example: "Income,Cost of Goods Sold"
-    If omitted, returns all accounts.
-    """
     user_id = current_user.get("userId")
-
     qb_data = get_quickbooks_token(user_id, "quickbooks")
-
     if not qb_data or "accessToken" not in qb_data or "realmId" not in qb_data:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not authenticated"
-        )
-    realm_id = qb_data.get("realmId")
-    access_token = qb_data.get("accessToken")
+        raise HTTPException(status_code=401, detail="User not authenticated")
 
-    url = f"{os.getenv("QUICKBOOKS_URL")}/{realm_id}/query"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json"
-    }
+    realm_id = qb_data["realmId"]
+    access_token = qb_data["accessToken"]
+    url = f"{QUICKBOOKS_BASE}/{realm_id}/query"
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
 
     if account_types:
         types_list = [t.strip() for t in account_types.split(",") if t.strip()]
-        quoted_types = ", ".join([f"'{t}'" for t in types_list])
-        query = f"SELECT * FROM Account WHERE AccountType IN ({quoted_types})"
+        quoted = ", ".join([f"'{t}'" for t in types_list])
+        query = f"SELECT * FROM Account WHERE AccountType IN ({quoted})"
     else:
         query = "SELECT * FROM Account"
 
-    params = {"query": query}
-
     try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-        accounts = data.get("QueryResponse", {}).get("Account", [])
-        filtered_accounts = [
-            {"Name": account.get("Name"), "Id": account.get("Id")}
-            for account in accounts
-        ]
-        return JSONResponse(content=filtered_accounts, status_code=status.HTTP_200_OK)
-    except requests.exceptions.HTTPError:
+        resp = requests.get(url, headers=headers, params={"query": query}, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        accounts = (data.get("QueryResponse", {}) or {}).get("Account", []) or []
+        filtered = [{"Name": a.get("Name"), "Id": a.get("Id")} for a in accounts if isinstance(a, dict)]
+        return JSONResponse(content=filtered, status_code=200)
+
+    except requests.exceptions.HTTPError as http_err:
+        # Surface QB status code and a snippet of the error
         try:
-            error_details = response.json()
+            err = resp.json()
         except Exception:
-            error_details = {}
-        raise HTTPException(
-            status_code=response.status_code,
-            detail={
-                "error": "Failed to fetch accounts",
-                "details": error_details
-            }
-        )
+            err = {"text": resp.text[:500]}
+        raise HTTPException(status_code=resp.status_code, detail={"error": "QuickBooks query failed", "details": err})
+
     except Exception as err:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred: {str(err)}"
-        )
+        logger.exception("Unexpected error in get_accounts")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {type(err).__name__}")
 
 @router.put("/save-config")
 async def save_config(request: Request,current_user: dict = Depends(get_current_user_from_cookie)):

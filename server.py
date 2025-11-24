@@ -192,41 +192,86 @@ def _wrap_async(coro_func):
   return runner
 
 
+# RUN_SCHEDULER = os.getenv("IS_SCHEDULER", "0") == "1"  # only one instance should schedule
+
 @inner.on_event("startup")
-def _startup():
-  if not RUN_SCHEDULER:
-    return
+async def _startup():
+    if not RUN_SCHEDULER:
+        return
 
-  sch = AsyncIOScheduler(timezone="America/Chicago")
+    # attach scheduler to the current event loop
+    scheduler = AsyncIOScheduler(timezone="America/Chicago")
 
-  # example existing job
-  sch.add_job(_wrap_async(expire_free_trials), trigger=CronTrigger(hour=0, minute=0),
-              id="trial_expire_daily", replace_existing=True, coalesce=True,
-              misfire_grace_time=3600, max_instances=1)
+    # if expire_free_trials / roll_failed_to_trash / purge_expired_trash are async,
+    # AsyncIOScheduler will await them properly
+    scheduler.add_job(
+        expire_free_trials,
+        trigger=CronTrigger(hour=0, minute=0),
+        id="trial_expire_daily",
+        replace_existing=True,
+        coalesce=True,
+        misfire_grace_time=3600,
+        max_instances=1,
+    )
 
-  # 03:00 CT – move failed → trash
-  sch.add_job(
-    _wrap_async(roll_failed_to_trash),
-    trigger=CronTrigger(hour=3, minute=0),
-    id="roll_failed_to_trash",
-    replace_existing=True,
-    coalesce=True,
-    misfire_grace_time=3600,
-    max_instances=1,
-  )
+    scheduler.add_job(
+        roll_failed_to_trash,
+        trigger=CronTrigger(hour=3, minute=0),
+        id="roll_failed_to_trash",
+        replace_existing=True,
+        coalesce=True,
+        misfire_grace_time=3600,
+        max_instances=1,
+    )
 
-  # 04:00 CT – purge expired trash
-  sch.add_job(
-    _wrap_async(purge_expired_trash),
-    trigger=CronTrigger(hour=4, minute=0),
-    id="purge_expired_trash",
-    replace_existing=True,
-    coalesce=True,
-    misfire_grace_time=3600,
-    max_instances=1,
-  )
+    scheduler.add_job(
+        purge_expired_trash,
+        trigger=CronTrigger(hour=4, minute=0),
+        id="purge_expired_trash",
+        replace_existing=True,
+        coalesce=True,
+        misfire_grace_time=3600,
+        max_instances=1,
+    )
 
-  sch.start()
+    scheduler.start()
+
+
+# @inner.on_event("startup")
+# def _startup():
+#   if not RUN_SCHEDULER:
+#     return
+#
+#   sch = AsyncIOScheduler(timezone="America/Chicago")
+#
+#   # example existing job
+#   sch.add_job(_wrap_async(expire_free_trials), trigger=CronTrigger(hour=0, minute=0),
+#               id="trial_expire_daily", replace_existing=True, coalesce=True,
+#               misfire_grace_time=3600, max_instances=1)
+#
+#   # 03:00 CT – move failed → trash
+#   sch.add_job(
+#     _wrap_async(roll_failed_to_trash),
+#     trigger=CronTrigger(hour=3, minute=0),
+#     id="roll_failed_to_trash",
+#     replace_existing=True,
+#     coalesce=True,
+#     misfire_grace_time=3600,
+#     max_instances=1,
+#   )
+#
+#   # 04:00 CT – purge expired trash
+#   sch.add_job(
+#     _wrap_async(purge_expired_trash),
+#     trigger=CronTrigger(hour=4, minute=0),
+#     id="purge_expired_trash",
+#     replace_existing=True,
+#     coalesce=True,
+#     misfire_grace_time=3600,
+#     max_instances=1,
+#   )
+#
+#   sch.start()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Session client-id endpoint (used by SocketProvider before connecting)

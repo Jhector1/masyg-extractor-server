@@ -1,28 +1,37 @@
+# -------------------------------
+# CustomerService with audit
+# -------------------------------
 import asyncio
-from pprint import pprint
-from typing import Dict, List, cast
+from itertools import chain
+from typing import Dict, List, Optional, cast
+
+from fastapi import Request
 
 from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
-from masyg_extractor.integration_qb_v5.domain.models import Customer
+from masyg_extractor.integration_qb_v5.domain.models import Item, Customer
 from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
 from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
+from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.audit_log_service import AuditLogService, audit_op
 from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
-from masyg_extractor.integration_qb_v5.utils import extract_uuid, safe_uuid_key
+from masyg_extractor.integration_qb_v5.utils import safe_uuid_key
 from masyg_extractor.integrations.xero.services.item_services import generate_sku
+from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.my_log import logger
-
+#get_customers
+from pprint import pprint
 
 class CustomerService:
     def __init__(
-            self,
-            context: IntegrationContext,
-            repo: QuickBooksFirestoreService,
-            client: IntegrationClientAdapter,
+        self,
+        context: IntegrationContext,
+        repo: QuickBooksFirestoreService,
+        client: IntegrationClientAdapter,
     ):
         self.context = context
         self.repo = repo
         self.client = client
         self.entity_helper = EntityHelper(context, repo, client)
+        self.audit = AuditLogService(context.user_id, integration="quickbooks")
 
     @staticmethod
     def get_sanitized_name(name: str) -> str:
@@ -42,13 +51,8 @@ class CustomerService:
         Constructs the payload for creating a single customer.
         """
         try:
-            sanitized_name = CustomerService.get_sanitized_name(customer.name)
-            # Uncomment extract_uuid and modify the email logic if email info is needed.
-            # email_address = f"{sanitized_name}@example.com"
-            return {
-                "Customer": customer.name,
-                # "PrimaryEmailAddr": {"Address": email_address},
-            }
+            # Keep it minimal (no duplication into audit)
+            return {"Customer": customer.name}
         except Exception as e:
             logger.error(f"Error creating payload for customer '{customer.name}': {str(e)}")
             return {}
@@ -57,26 +61,22 @@ class CustomerService:
     def create_bulk_customer_payload(customer: Customer) -> dict:
         """
         Constructs the payload for a customer in bulk creation.
-        Adds a generated ContactNumber based on a truncated transaction UUID.
         """
-        sanitized_name = customer.name.lower().replace(' ', '_').replace("'", "")
+        sanitized_name = customer.name.lower().replace(" ", "_").replace("'", "")
         email_address = f"{sanitized_name}@example.com"
         try:
             payload = {
                 "DisplayName": customer.name,
-                "PrimaryEmailAddr": {"Address": email_address}
+                "PrimaryEmailAddr": {"Address": email_address},
             }
             return {
                 "bId": safe_uuid_key(customer.transaction_id) + "_" + generate_sku(customer.name),
                 "Customer": payload,
-                "operation": "create"
+                "operation": "create",
             }
-
-
         except Exception as e:
             logger.error(f"Error creating bulk payload for customer '{customer.name}': {str(e)}")
         return {}
-
 
     async def check_customer_exists(self, customer: Customer) -> bool:
         """
@@ -93,7 +93,6 @@ class CustomerService:
             logger.error(f"Error checking existence for customer '{customer.name}': {str(e)}")
             return False
 
-
     async def fetch_customer_id_by_name(self, customer_name: str) -> str:
         """
         Fetches the customer ID based on their name.
@@ -104,7 +103,7 @@ class CustomerService:
             logger.error(f"Error fetching customer ID for name '{customer_name}': {str(e)}")
             return ""
 
-
+    @audit_op(doc_type="-", entity_type="Customer", operation="create")
     async def create_customer(self, customer: Customer) -> str:
         """
         Creates a customer and returns the generated customer ID.
@@ -116,7 +115,6 @@ class CustomerService:
         except Exception as e:
             logger.error(f"Error creating customer '{customer.name}': {str(e)}")
             return ""
-
 
     async def get_or_create_customer(self, customer: Customer) -> str:
         """
@@ -163,70 +161,94 @@ class CustomerService:
             logger.error(f"Error in get_or_create_customer for '{customer.name}': {str(e)}")
             return ""
 
-
     async def create_customer_in_bulk(self, local_customers: Dict[str, Customer]) -> Dict[str, Customer]:
         """
         Creates customers in bulk.
-        Filters out existing customers and merges newly created customers with the already stored ones.
+        - Filters out existing customers.
+        - Builds per-customer bId entries.
+        - Starts audit PENDING per bId.
+        - Sends batch and marks ok/fail per bId when batch info is available;
+          otherwise marks all intended as ok (fallback).
         """
-
         try:
             name_key: str = "DisplayName"
             id_key: str = "Id"
             entity = "Customer"
 
-            # Convert the dictionary values to a list of customers.
+            # Flatten dict to list
             customer_list = list(local_customers.values())
-            print(customer_list)
 
-            # Filter extract_uuid out customers that already exist.
+            # Filter out customers that already exist.
             non_existing_customers = cast(
                 List[Customer],
-                await self.entity_helper.get_non_existing_entities(customer_list, entity, name_key, id_key)
+                await self.entity_helper.get_non_existing_entities(customer_list, entity, name_key, id_key),
             )
-            print("non-exist",non_existing_customers)
-
-
 
             # Build the payload for bulk creation.
-            payload_customers = [ self.create_bulk_customer_payload(customer) for customer in non_existing_customers]
+            payload_customers = [self.create_bulk_customer_payload(customer) for customer in non_existing_customers]
+            payload_customers = [p for p in payload_customers if p]  # drop any {}
             payload = {"BatchItemRequest": payload_customers}
             pprint(payload)
-            all_current_customers = cast(
-                Dict[str, Customer],
-                await self.entity_helper.create_entity_in_bulk_and_merge_with_current(
-                    local_customers, entity, payload, name_key, id_key, tracker_key="bId"
+
+            # Start per-bId PENDING audit
+            intended_bids = [p.get("bId") for p in payload_customers if p.get("bId")]
+            for bid in intended_bids:
+                self.audit.start(
+                    event_id=f"-:Customer:{bid}:{bid}",
+                    doc_type="-",
+                    entity_type="Customer",
+                    operation="bulk_create",
+                    transaction_id=None,
+                    group_id=None,
+                    idempotency_key=bid,
+                    payload=None,
                 )
+
+            result = await self.entity_helper.create_entity_in_bulk_and_merge_with_current(
+                local_customers, entity, payload, name_key, id_key, tracker_key="bId"
             )
+
+            # Support both return shapes:
+            batch_resp = None
+            all_current_customers: Dict[str, Customer]
+            if isinstance(result, dict) and "merged" in result and "batch" in result:
+                all_current_customers = cast(Dict[str, Customer], result["merged"])
+                batch_resp = result["batch"]
+            else:
+                all_current_customers = cast(Dict[str, Customer], result)
+
+            if isinstance(batch_resp, list):
+                for entry in batch_resp:
+                    bid = entry.get("bId")
+                    if not bid:
+                        continue
+                    if "Fault" in entry:
+                        self.audit.fail(
+                            event_id=f"-:Customer:{bid}:{bid}",
+                            group_id=None,
+                            transaction_id=None,
+                            error_category="Validation",
+                            error_message="QuickBooks Fault",
+                            error_details=None,
+                            retryable=True,
+                        )
+                    else:
+                        self.audit.ok(
+                            event_id=f"-:Customer:{bid}:{bid}",
+                            group_id=None,
+                            transaction_id=None,
+                        )
+            else:
+                # Fallback: mark all intended bIds as success.
+                for bid in intended_bids:
+                    self.audit.ok(
+                        event_id=f"-:Customer:{bid}:{bid}",
+                        group_id=None,
+                        transaction_id=None,
+                    )
+
             logger.info(f"Bulk customer creation merged payload: {all_current_customers}")
             return all_current_customers
         except Exception as e:
             logger.error(f"Error in create_customer_in_bulk: {str(e)}")
-            return {}
-
-
-    async def get_or_create_customers_bulk(self, customers: List[Customer]) -> Dict[str, str]:
-        """
-        Deduplicates customers (based on lowercased, trimmed names) and concurrently retrieves or creates each.
-        Returns a mapping of the unique key to the customer ID.
-        """
-        try:
-            unique_customers: Dict[str, Customer] = {}
-            for customer in customers:
-                key = customer.name.strip().lower()
-                if key not in unique_customers:
-                    unique_customers[key] = customer
-
-            tasks = {key: asyncio.create_task(self.get_or_create_customer(cust)) for key, cust in unique_customers.items()}
-            results: Dict[str, str] = {}
-            for key, task in tasks.items():
-                try:
-                    customer_id = await task
-                    results[key] = customer_id
-                    logger.info(f"Processed customer '{key}' with ID: {customer_id}")
-                except Exception as e:
-                    logger.error(f"Error processing customer with key '{key}': {str(e)}")
-            return results
-        except Exception as e:
-            logger.error(f"Error in get_or_create_customers_bulk: {str(e)}")
             return {}
