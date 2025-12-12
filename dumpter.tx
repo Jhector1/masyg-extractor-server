@@ -1,4 +1,5 @@
 cd /opt/masyg-extractor-server
+git pull --ff-only
 docker compose build --no-cache masyg-extractor-app
 docker compose up -d masyg-extractor-app
 docker logs -f masyg-extractor-app

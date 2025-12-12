@@ -68,7 +68,7 @@ async def handle_google_login(request: Request, google_id_token: str):
             new_user = {
                 'email': google_email,
                 'username': username,
-                'password': generate_password_hash(uuid.uuid4().hex, method='pbkdf2:sha256'),
+                'password': a(uuid.uuid4().hex, method='pbkdf2:sha256'),
                 'isSubscribed': False,
                 'hasUsedTrial': False,
             }
@@ -81,7 +81,7 @@ async def handle_google_login(request: Request, google_id_token: str):
 
             start = time.time()
             loop = asyncio.get_running_loop()
-            user_found = await asyncio.wait_for(
+            user_foaund = await asyncio.wait_for(
                 loop.run_in_executor(executor, add_new_user),
                 timeout_secs=10
             )
@@ -128,3 +128,6 @@ async def handle_password_login(request: Request, email: str, password: str):
     except Exception as e:
         print(f"Error during login: {e}")
         return JSONResponse(content={'message': 'An error occurred during login'}, status_code=500)
+
+
+

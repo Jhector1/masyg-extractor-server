@@ -250,6 +250,7 @@ async def webhook_received(request: Request):
     ):
         _recompute_is_subscribed(uid)
 
+
     return JSONResponse({"status": "ok"})
 
 

@@ -13,6 +13,7 @@ from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.audit_log_
     AuditLogService,
     audit_op,  # used by subclasses, not here
 )
+from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.customer_service import CustomerService
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.item_service import ItemService
 from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integration_qb_v5.utils import safe_uuid_key
@@ -373,12 +374,19 @@ class DocumentService:
             if firestore_records:
                 await self.store_records_in_firebase(firestore_records)
 
+            # any_success = any("Fault" not in p for p in response_payload)
             any_success = any("Fault" not in p for p in response_payload)
             if any_success:
-                self.audit.ok(batch_event_id, group_id=None, transaction_id=None)
+                self.audit.ok(event_id=batch_event_id, group_id=None, transaction_id=None)
             else:
                 self.audit.fail(
-                    batch_event_id, None, None, "Unknown", "All items failed", quickbooks_response, retryable=True
+                    event_id=batch_event_id,
+                    group_id=None,
+                    transaction_id=None,
+                    error_category="Unknown",
+                    error_message="All items failed",
+                    error_details=quickbooks_response,
+                    retryable=True,
                 )
 
             await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)

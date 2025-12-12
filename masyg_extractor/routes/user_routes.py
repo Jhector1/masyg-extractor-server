@@ -40,6 +40,8 @@ router = APIRouter(prefix="/user")
 
 # --- Helper Async Functions ---
 
+users_coll = firestore_db.collection("users")
+
 def _query_user_by_email(email):
     """Blocking Firestore query to get a user by email."""
     docs = list(ref.where('email', '==', email).limit(1).stream())
@@ -89,6 +91,22 @@ async def verify_id_token_async(token, timeout_secs=10):
     )
 
 # --- Async Route Handlers ---
+async def update_last_login_async(user_id: str, timeout_secs: int = 10):
+    """
+    Update the lastLoginAt field on the user document.
+    Stores an ISO 8601 string in UTC.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    def _update_last_login():
+        # you can use ref or users_coll; both point to "users"
+        users_coll.document(user_id).update({"lastLoginAt": now_iso})
+
+    loop = asyncio.get_running_loop()
+    await asyncio.wait_for(
+        loop.run_in_executor(executor, _update_last_login),
+        timeout_secs
+    )
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 async def signup(request: Request,  background_tasks: BackgroundTasks):
@@ -111,6 +129,7 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
     )
     if existing_users:
         raise HTTPException(status_code=400, detail="Email already exists")
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     new_user = {
         'username': username,
@@ -118,7 +137,9 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
         'password': generate_password_hash(password, method='pbkdf2:sha256'),
         'isSubscribed': is_subscribed,
         'hasUsedTrial': False,
-        'createdAt': datetime.now(timezone.utc).isoformat()  # or datetime.now().isoformat() for local time
+        'createdAt': now_iso,  # or datetime.now().isoformat() for local time
+        'lastLoginAt': now_iso,  # 👈 first login time = signup time
+
     }
     user_added = await add_new_user_async(new_user, timeout_secs=10)
 
@@ -192,74 +213,6 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
     return {"message": "User created", "userId": user_added['userId']}
 
 
-# @router.post("/login")
-# async def login(request: Request):
-#     data = await request.json()
-#     clientId = request.session.get("client_id")
-#     if clientId is None:
-#         clientId = 'Guest'
-#     # print('client------', clientId)
-#     if not data:
-#         raise HTTPException(status_code=400, detail="No data provided")
-#
-#     email = data.get('email', '').lower().strip()
-#     password = data.get('password')
-#     google_id_token = data.get('googleIdToken')
-#
-#     if not email and not google_id_token:
-#         raise HTTPException(status_code=400, detail="Missing credentials")
-#
-#     try:
-#         if google_id_token:
-#             # Google login logic.
-#             decoded_token = await verify_id_token_async(google_id_token, timeout_secs=10)
-#             google_email = decoded_token.get('email')
-#             username = decoded_token.get('name', 'Google User')
-#
-#             user_found = await query_user_by_email_async(google_email, timeout_secs=10)
-#
-#             if not user_found:
-#                 new_user = {
-#                     'email': google_email,
-#                     'username': username,
-#                     'password': generate_password_hash(uuid.uuid4().hex, method='pbkdf2:sha256'),
-#                     'isSubscribed': False,
-#                     'hasUsedTrial': False,
-#                 }
-#                 user_found = await add_new_user_async(new_user, timeout_secs=10)
-#
-#         elif email and password:
-#             user_found = await query_user_by_email_async(email, timeout_secs=10)
-#             if not user_found or not check_password_hash(user_found.get('password'), password):
-#                 # Emit socket message for invalid login (assuming sio is integrated)
-#                 await sio.emit('log_message', {'data': '❌Invalid email or password!'}, room=clientId)
-#                 raise HTTPException(status_code=400, detail="Invalid email or password")
-#         else:
-#             raise HTTPException(status_code=400, detail="Invalid request")
-#
-#         # Assuming session is available via request.session from a session middleware.
-#         request.session['user'] = {
-#             'userId': user_found['userId'],
-#             'username': user_found.get('username'),
-#             'email': user_found.get('email'),
-#             'isSubscribed': user_found.get('isSubscribed'),
-#             'hasUsedTrial': user_found.get('hasUsedTrial')
-#         }
-#
-#         await sio.emit('log_message', {'data': '✅Login successful!'}, room=clientId)
-#         print("Client ID", clientId)
-#         # await sio.emit("welcome", {"message": f"Welcome, {clientId}!"}, room=clientId)
-#         asyncio.create_task(send_log( '✅Login successful!', user_room=clientId))
-#         # logger.info(f"✅Login successful!", extra={"target_room": clientId})
-#         # logger.info("Processing POST request", extra={"target_room": sid})
-#
-#         return {"message": "Login successful", "user": request.session['user']}
-#
-#     except Exception as e:
-#         print(f"Error during login: {e}")
-#         await sio.emit('log_message', {'data': '❌Error during login!'}, room=clientId)
-#         raise HTTPException(status_code=500, detail="An error occurred during login")
-
 
 @router.post("/logout")
 async def logout(request: Request, response: Response):
@@ -276,32 +229,6 @@ async def logout(request: Request, response: Response):
 
 
 
-
-
-# @router.get("/current")
-# async def get_current_user(request: Request):
-#     current_user = request.session.get('user')
-#     if not current_user:
-#         raise HTTPException(status_code=401, detail="No user is currently logged in")
-#
-#     loop = asyncio.get_running_loop()
-#     user_doc = await loop.run_in_executor(
-#         executor,
-#         lambda: ref.document(current_user['userId']).get()
-#     )
-#     if not user_doc.exists:
-#         raise HTTPException(status_code=404, detail="User not found in database")
-#
-#     firebase_user_data = user_doc.to_dict()
-#     request.session['user'] = {
-#         'userId': current_user['userId'],
-#         'username': firebase_user_data.get('username'),
-#         'email': firebase_user_data.get('email'),
-#         'isSubscribed': firebase_user_data.get('isSubscribed', False),
-#         'hasUsedTrial': firebase_user_data.get('hasUsedTrial', False)
-#     }
-#     return {"user": request.session['user']}
-#
 
 @router.post("/update")
 async def update_user_info(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
@@ -611,10 +538,6 @@ async def delete_my_account(
 
 
 
-users_coll = firestore_db.collection("users")
-
-
-ACCESS_TOKEN_EXPIRE_MINUTES = 1
 REFRESH_TOKEN_EXPIRE_DAYS   =2
 
 # def create_access_token(data: dict, expires_delta: timedelta):
@@ -657,6 +580,9 @@ async def login(request: Request, response: Response):
 
     user_id = user["userId"]
 
+    # ✅ 3.5. Update last login timestamp in Firestore
+    await update_last_login_async(user_id)
+
     # 4. Gather trial info (unchanged)
     trial_ref = users_coll.document(user_id).collection("plan").document("trial")
     trial_snap= await asyncio.to_thread(trial_ref.get)
@@ -665,25 +591,24 @@ async def login(request: Request, response: Response):
 
     # 5. Build consistent payload
     user_payload = {
-        "userId":      user_id,
-        "username":    user.get("username"),
-        "email":       user.get("email"),
-        "isSubscribed":user.get("isSubscribed", False),
-        "hasUsedTrial":has_used_trial,
-        "trialDate":    trial_date.isoformat() if trial_date else None
+        "userId":       user_id,
+        "username":     user.get("username"),
+        "email":        user.get("email"),
+        "isSubscribed": user.get("isSubscribed", False),
+        "hasUsedTrial": has_used_trial,
+        "trialDate":    trial_date.isoformat() if trial_date else None,
+        # Optional: return previous lastLoginAt value to the client
+        "lastLoginAt":  user.get("lastLoginAt"),
     }
-    #print
 
     # 6. Create tokens
     access_token  = create_access_token(
         data={ "sub": user_id, **user_payload },
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    refresh_token = create_refresh_token(   data={ "sub": user_id, **user_payload },
-   )
+    refresh_token = create_refresh_token(data={ "sub": user_id, **user_payload })
 
-    # 7. Set cookies
-    # → Access token (short‑lived, HTTP‑only)
+    # 7. Set cookies (unchanged)
     response.set_cookie(
         key="access_token",
         value=access_token,
@@ -692,7 +617,6 @@ async def login(request: Request, response: Response):
         samesite="lax"
     )
 
-    # → Refresh token (long‑lived if remember_me)
     refresh_opts = dict(
         key="refresh_token",
         value=refresh_token,
@@ -705,7 +629,6 @@ async def login(request: Request, response: Response):
         refresh_opts["max_age"] = REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
     response.set_cookie(**refresh_opts)
 
-    # → CSRF token (non‑HTTP‑only, so your front end can read & inject it)
     csrf = generate_csrf_token()
     response.set_cookie(
         key="csrf_token",
@@ -717,74 +640,6 @@ async def login(request: Request, response: Response):
 
     # 8. Return user data
     return {"message": "Login successful", "user": user_payload}
-
-# @router.post("/login")
-# async def login(request: Request, response: Response):
-#     data = await request.json()
-#     email = data.get("email", "").lower().strip()
-#     password = data.get("password")
-#     google_id_token = data.get("googleIdToken")
-#
-#     if not email and not google_id_token:
-#         raise HTTPException(status_code=400, detail="Missing credentials")
-#
-#     # 1) Fetch or create the top‐level user record
-#     if google_id_token:
-#         decoded = await verify_id_token_async(google_id_token, timeout_secs=10)
-#         email, username = decoded["email"], decoded.get("name", "Google User")
-#         user = await query_user_by_email_async(email, timeout_secs=10)
-#         if not user:
-#             user = await add_new_user_async({
-#                 "email": email,
-#                 "username": username,
-#                 "password": generate_password_hash(uuid.uuid4().hex, method="pbkdf2:sha256"),
-#                 "isSubscribed": False,
-#             }, timeout_secs=10)
-#     else:
-#         user = await query_user_by_email_async(email, timeout_secs=10)
-#         if not user or not check_password_hash(user["password"], password):
-#             raise HTTPException(status_code=400, detail="Invalid email or password")
-#
-#     user_id = user["userId"]
-#
-#     # 2) Load the trial doc from /users/{uid}/plan/trial
-#     trial_ref = users_coll.document(user_id).collection("plan").document("trial")
-#     trial_snap = await asyncio.to_thread(trial_ref.get)
-#
-#     has_used_trial = False
-#     trial_date = None
-#     if trial_snap.exists:
-#         tdata = trial_snap.to_dict()
-#         has_used_trial = bool(tdata.get("hasUsed", False))
-#         trial_date = tdata.get("date")  # this will be a Firestore Timestamp
-#
-#     # 3) Build payload and issue JWT
-#     user_payload = {
-#         "userId":    user_id,
-#         "username":  user.get("username"),
-#         "email":     user.get("email"),
-#         "isSubscribed": user.get("isSubscribed", False),
-#         "hasUsedTrial": has_used_trial,
-#         "trialDate": trial_date.isoformat() if trial_date else None
-#     }
-#     # print(user_payload, 'gttgg')
-#
-#     access_token = create_access_token(
-#         data={
-#             "sub": user_id,
-#             "username": user_payload.get("username"),
-#             "email": user_payload.get("email"),
-#             # you can embed trial status in the token if desired
-#             "isSubscribed": user_payload["isSubscribed"],
-#             "hasUsedTrial": user_payload["hasUsedTrial"],
-#         },
-#         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-#     )
-#
-#     response.set_cookie("access_token", access_token)
-#     response.set_cookie("csrf_token", generate_csrf_token())
-#
-#     return {"message": "Login successful", "user": user_payload}
 
 
 @router.get("/current")

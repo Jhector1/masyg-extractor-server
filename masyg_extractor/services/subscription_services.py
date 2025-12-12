@@ -14,7 +14,10 @@ ref = firestore_db.collection("users")  # Firestore collection for user document
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
 
-ACTIVEISH = {"active", "trialing", "past_due", "unpaid"}  # treat these as subscribed
+# subscription status semantics
+
+ACTIVE_SUBSCRIPTION_STATUSES = {"trialing", "active", "past_due"}
+TERMINAL_BAD_STATUSES = {"unpaid", "canceled", "incomplete", "incomplete_expired", "paused"}
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -48,12 +51,10 @@ def _trial_active(user_id: str) -> bool:
 
 def _stripe_active(user_doc: dict) -> bool:
     status = (user_doc.get("subscriptionStatus") or "").lower()
-    if status not in ACTIVEISH:
+    if status not in ACTIVE_SUBSCRIPTION_STATUSES:
         return False
     cancel_at = _ensure_aware(user_doc.get("cancelAt"))
-    # if a cancel date exists, it must be in the future
     return bool(not cancel_at or _utcnow() < cancel_at)
-
 # masyg_extractor/services/subscription_services.py
 # from datetime import datetime, timezone
 # from firebase_admin import firestore
@@ -66,7 +67,15 @@ users = db.collection("users")
 def _recompute_is_subscribed(uid: str) -> dict:
     """
     Derived truth:
-      True if (Stripe subscription active|trialing) OR (trialEnd in the future)
+
+      - subscriptionStatus: mirror Stripe's latest subscription status exactly
+      - isSubscribed:
+          True  if latest status in ACTIVE_SUBSCRIPTION_STATUSES
+                (active/trialing/past_due) and not already canceled in the past
+          OR    trialEnd in the future
+
+          False otherwise (unpaid / canceled / no subs / trial ended)
+
     Mirrors a small 'trial' object into top-level for cheap reads.
     """
     user_ref = users.document(uid)
@@ -78,20 +87,41 @@ def _recompute_is_subscribed(uid: str) -> dict:
     stripe_customer_id = data.get("stripeCustomerId")
 
     # 1) Stripe side
-    stripe_active = False
     stripe_status = None
     cancel_at = None
+    stripe_active = False
 
     if stripe_customer_id:
         try:
-            subs = stripe.Subscription.list(customer=stripe_customer_id, status="all", limit=3)
+            subs = stripe.Subscription.list(
+                customer=stripe_customer_id,
+                status="all",
+                limit=5,
+            )
+            print(subs)
+
+            latest_sub = None
             for s in subs.auto_paging_iter():
-                # consider "active" or "trialing" as subscribed
-                if s.status in ("active", "trialing"):
+                if latest_sub is None or s.created > latest_sub.created:
+                    latest_sub = s
+
+            if latest_sub:
+                stripe_status = (latest_sub.status or "").lower()
+                print("status: ",stripe_status)
+                cancel_at = (
+                    datetime.fromtimestamp(latest_sub.cancel_at, tz=timezone.utc)
+                    if latest_sub.cancel_at
+                    else None
+                )
+
+                # "active" in business sense: still good (or in dunning) and not canceled in the past
+                now = datetime.now(timezone.utc)
+                if (
+                    stripe_status in ACTIVE_SUBSCRIPTION_STATUSES
+                    and (not cancel_at or cancel_at > now)
+                ):
                     stripe_active = True
-                    stripe_status = s.status
-                    cancel_at = s.cancel_at and datetime.fromtimestamp(s.cancel_at, tz=timezone.utc)
-                    break
+
         except Exception as e:
             logger.warning(f"Stripe lookup failed for {uid}: {e}")
 
@@ -99,20 +129,22 @@ def _recompute_is_subscribed(uid: str) -> dict:
     trial_snap = user_ref.collection("plan").document("trial").get()
     trial = trial_snap.to_dict() if trial_snap.exists else {}
     trial_end = trial.get("trialEnd")
+
     if isinstance(trial_end, datetime) and trial_end.tzinfo is None:
         trial_end = trial_end.replace(tzinfo=timezone.utc)
 
     now = datetime.now(timezone.utc)
     trial_active = bool(trial_end and trial_end > now)
 
-    # 3) Derived
+    # 3) Derived isSubscribed
     is_sub = bool(stripe_active or trial_active)
+
+    effective_status = stripe_status or ("trialing" if trial_active else "none")
 
     patch = {
         "isSubscribed": is_sub,
-        "subscriptionStatus": stripe_status or ("trialing" if trial_active else "none"),
+        "subscriptionStatus": effective_status,
         "cancelAt": cancel_at.isoformat() if cancel_at else None,
-        # mirror (keeps client logic simple)
         "trial": {
             "hasUsed": bool(trial.get("hasUsed")),
             "date": trial.get("date").isoformat() if isinstance(trial.get("date"), datetime) else None,
@@ -122,9 +154,6 @@ def _recompute_is_subscribed(uid: str) -> dict:
     }
     user_ref.set(patch, merge=True)
     return patch
-
-
-
 
 
 def update_firestore_user(user_id: str, is_subscribed: bool = None, has_used_trial: bool = None, request: Request = None):

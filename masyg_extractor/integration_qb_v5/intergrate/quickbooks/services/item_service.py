@@ -139,6 +139,7 @@ class ItemService:
 
     async def get_default_service_accounts(self) -> tuple[str, str]:
         """
+        AuditLogService
         Retrieve default income and expense accounts from QuickBooks.
         Uses primary criteria for account selection with fallback to Uncategorized types.
         """
@@ -214,7 +215,7 @@ class ItemService:
     async def create_item_in_bulk(self, local_items: Dict[str, List[Item]]) -> Dict[str, List[Item]]:
         """
         Create items in bulk in the target system.
-
+db.collection("users").collection(user_id).collection("audit_logs")
         1. Flatten input map.
         2. Filter out existing items.
         3. Build BatchItemRequest with bId per entry.

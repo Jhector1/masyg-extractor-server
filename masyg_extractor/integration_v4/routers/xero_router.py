@@ -424,15 +424,18 @@ async def get_accounts(request: Request,current_user: dict = Depends(get_current
     user_Id = current_user.get("userId")
     params = {}
     if account_types:
+        print(12334555,account_types)
         types_list = [t.strip() for t in account_types.split(",") if t.strip()]
         where_clause = " OR ".join([f'Type=="{t}"' for t in types_list])
         params["where"] = where_clause
 
     try:
+        print(12334555, account_types)
         response = await xero_request( "Accounts", user_id=user_Id, method="GET", params=params)
         accounts = response.get("Accounts", [])
         return JSONResponse(content=accounts, status_code=status.HTTP_200_OK)
     except Exception as err:
+        print(12334555, err)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred: {str(err)}"

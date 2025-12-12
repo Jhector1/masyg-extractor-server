@@ -20,7 +20,7 @@ class AuditLogService:
     def _events(self):
         return (self.db.collection("users").document(self.user_id)
                 .collection("integrations").document(self.integration)
-                .collection("audit").collection("events"))
+                .collection("audit_events"))
 
     def _tx_ref(self, group_id: str, transaction_id: str):
         return (self.db.collection("users").document(self.user_id)
