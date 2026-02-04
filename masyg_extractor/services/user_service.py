@@ -68,7 +68,7 @@ async def handle_google_login(request: Request, google_id_token: str):
             new_user = {
                 'email': google_email,
                 'username': username,
-                'password': a(uuid.uuid4().hex, method='pbkdf2:sha256'),
+                'password': generate_password_hash(uuid.uuid4().hex, method='pbkdf2:sha256'),
                 'isSubscribed': False,
                 'hasUsedTrial': False,
             }

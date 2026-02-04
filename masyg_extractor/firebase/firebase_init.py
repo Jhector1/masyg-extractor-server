@@ -18,7 +18,7 @@ def firebase_init():
     try:
         # If the default app exists, this will succeed.
         firebase_admin.get_app()
-        print("Firebase initialized")
+
     except ValueError:
         # If the default app does not exist, initialize it.
         # cred_path = os.path.join(FIREBASE_CONFIG)
@@ -27,6 +27,6 @@ def firebase_init():
         firebase_admin.initialize_app(cred, {
             'databaseURL': os.getenv('FIREBASE_DATABASE_URL')
         })
-        print("Firebase initialized")
+
 # # Reference the database
 # ref = db.reference('/')

@@ -82,7 +82,7 @@ def extract_text_from_pdf_image(file):
         response = client.text_detection(image=vision_image)
 
         if response.error.message:
-            print(f"Vision API error: {response.error.message}")
+
             return ""
 
         texts = response.text_annotations

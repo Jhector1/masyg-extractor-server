@@ -98,7 +98,7 @@ def _recompute_is_subscribed(uid: str) -> dict:
                 status="all",
                 limit=5,
             )
-            print(subs)
+
 
             latest_sub = None
             for s in subs.auto_paging_iter():
@@ -107,7 +107,7 @@ def _recompute_is_subscribed(uid: str) -> dict:
 
             if latest_sub:
                 stripe_status = (latest_sub.status or "").lower()
-                print("status: ",stripe_status)
+
                 cancel_at = (
                     datetime.fromtimestamp(latest_sub.cancel_at, tz=timezone.utc)
                     if latest_sub.cancel_at

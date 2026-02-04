@@ -51,7 +51,7 @@ class QuickBooksClientAdapter(IntegrationClientAdapter):
                 method = method.upper()
                 if method == "GET":
                     # params =kwargs.pop("params", None)
-                    print('params', params)
+
 
                     response = await client.get(url, headers=headers, params=params, **kwargs)
 

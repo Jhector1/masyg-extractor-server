@@ -88,7 +88,7 @@ TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "30"))
 
 def expire_free_trials():
   now = datetime.now(timezone.utc)
-  print(f"[expire_free_trials] sweep @ {now.isoformat()}", flush=True)
+
 
   for user_snap in db.collection("users").stream():
     uid = user_snap.id
@@ -121,5 +121,3 @@ def expire_free_trials():
 
     # ✅ key: never force isSubscribed here; always recompute from trial+Stripe
     _recompute_is_subscribed(uid)
-
-  print("✅ [expire_free_trials] recompute sweep done.", flush=True)

@@ -127,7 +127,7 @@ class EntityHelper:
             method="POST",
         )
         logger.info(f"create_{entity.lower()} response received: {response}")
-        pprint(response)
+
         # Update progress weight explicitly if needed
         self.context.progress[f"creating_{entity.lower()}"] = self.context.progress_logger.getWeight(
             f"creating_{entity.lower()}")

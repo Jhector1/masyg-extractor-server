@@ -131,7 +131,7 @@ class DocumentService:
             # Create customers and items in bulk.
             customers_created = await self.customer_service.create_customer_in_bulk(customers_map)
             items_created = await self.item_service.create_item_in_bulk(items_map)
-            pprint(customers_created)
+
             # Build payloads for each document.
             # Build payloads for each document.
             for document in documents:
@@ -196,15 +196,14 @@ class DocumentService:
 
             if document_payload_bulk:
                 bulk_payload = {"Invoices": document_payload_bulk}
-                pprint({"xero_payload":bulk_payload})
+
                 xero_response = await self.client.request(
                     xero_token=self.repo.get_integration_token(),
                     payload=bulk_payload,
                     endpoint="Invoices",
                     method="POST"
                 )
-                print("xd", xero_response)
-                pprint({"xero-res":xero_response})
+
                 if "error" not in xero_response:
                     pass
                     await self.store_records_in_firebase(invoice_records)

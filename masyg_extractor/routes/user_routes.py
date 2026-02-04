@@ -60,7 +60,7 @@ async def query_user_by_email_async(email, timeout_secs=10):
         timeout_secs
     )
     elapsed = time.time() - start
-    print(f"Firestore query took {elapsed:.2f} seconds")
+
     return user_found
 
 async def add_new_user_async(new_user, timeout_secs=10):
@@ -78,8 +78,7 @@ async def add_new_user_async(new_user, timeout_secs=10):
         loop.run_in_executor(executor, _add_new_user),
         timeout_secs
     )
-    elapsed = time.time() - start
-    print(f"Firestore add operation took {elapsed:.2f} seconds")
+
     return user_added
 
 async def verify_id_token_async(token, timeout_secs=10):
@@ -293,7 +292,7 @@ class ResetRequest(BaseModel):
 @router.post("/request-reset")
 async def request_reset(request: Request, reset_req: ResetRequest, background_tasks: BackgroundTasks):
     email = reset_req.email
-    print(email)
+
 
     loop = asyncio.get_running_loop()
     users_query = await loop.run_in_executor(
@@ -313,7 +312,7 @@ async def request_reset(request: Request, reset_req: ResetRequest, background_ta
     # print(token)
 
     reset_url = f"{os.getenv('CLIENT_URL')}/reset-password/{token}"
-    print("RESET URL",reset_url)
+
     # Build a modern HTML email template with inline CSS
     html_body = f"""
     <html>
@@ -444,8 +443,8 @@ async def create_customer_portal(request: Request,  current_user: dict = Depends
         return {"url": session_data.url}
 
     except Exception as e:
-        print(f"Error creating customer portal: {e}")
-        print(str(e))
+
+
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -469,7 +468,7 @@ async def delete_my_account(
 
     # Validate that the authenticated user has a valid user ID.
     user_id = current_user.get('userId')
-    print(user_id, "user_id")
+
     if not user_id:
         logger.error("Authenticated user does not have a userId")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User ID not found")

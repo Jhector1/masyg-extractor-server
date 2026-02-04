@@ -64,8 +64,7 @@ class XeroClientAdapter(IntegrationClientAdapter):
                 else:
                     raise Exception(f"Unsupported HTTP method: {method}")
                 # print(response)
-                if endpoint=="Invoices":
-                    pprint({"xero-res":response})
+
 
                 response.raise_for_status()
                 response_json = response.json()

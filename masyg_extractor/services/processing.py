@@ -309,7 +309,7 @@ async def process_file_async(
         # progress["file_read"] = 20.0
         # await safe_emit_progress(client_id, calculate_overall_progress(progress))
         read_steps = 5*files_count
-        print(f"file_read...")
+
         for step in range(read_steps):
             await asyncio.sleep(0.2)
             progress["file_read"] = ((step + 1) / read_steps) * ExtractorProgressLog.FILE_READ_WEIGHT
@@ -327,7 +327,7 @@ async def process_file_async(
         logger.info(f"Final successful extractor used: {extractor_used}")
 
         comp_steps = 5*files_count
-        print(f"compression...")
+
         for step in range(comp_steps):
             await asyncio.sleep(0.2)
             progress["compression"] = ((step + 1) / comp_steps) * ExtractorProgressLog.COMPRESSION_WEIGHT
@@ -338,7 +338,7 @@ async def process_file_async(
         await update_firestore_file(user_id, group_id, sanitized_filename, parsed_content)
 
         fs_steps = 5*files_count
-        print(f"firestore_update...")
+
         for step in range(fs_steps):
             await asyncio.sleep(0.2)
             progress["firestore_update"] = ((step + 1) / fs_steps) * ExtractorProgressLog.FIRESTORE_UPDATE_WEIGHT

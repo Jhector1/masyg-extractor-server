@@ -188,7 +188,7 @@ class CustomerService:
             payload_customers = [self.create_bulk_customer_payload(customer) for customer in non_existing_customers]
             payload_customers = [p for p in payload_customers if p]  # drop any {}
             payload = {"BatchItemRequest": payload_customers}
-            pprint(payload)
+
 
             # Start per-bId PENDING audit
             intended_bids = [p.get("bId") for p in payload_customers if p.get("bId")]

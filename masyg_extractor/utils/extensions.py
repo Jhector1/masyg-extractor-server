@@ -28,7 +28,7 @@ def _allowed_origins():
 
 ALLOWED_ORIGINS = _allowed_origins() if ENV != "production" else _allowed_origins()
 
-print("[sio] cors_allowed_origins:", ALLOWED_ORIGINS, flush=True)
+
 
 # Optional: crank up socketio/engineio logging to see rejected origin values
 logging.getLogger("socketio").setLevel(logging.DEBUG)

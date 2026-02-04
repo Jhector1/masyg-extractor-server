@@ -132,7 +132,7 @@ def verify_tmp_access():
         test_path = "/tmp/test_tmp_access.txt"
         with open(test_path, "w") as test_file:
             test_file.write("This is a test.")
-        print("Write to /tmp succeeded.")
+
         os.remove(test_path)
     except Exception as e:
         raise Exception(f"Cannot write to /tmp: {str(e)}")

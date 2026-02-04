@@ -221,7 +221,7 @@ def get_xero_tenant_id(access_token: str):
 
             raise Exception("Failed to obtain tenant_id.")
     else:
-        print("Failed to retrieve connections or no connections available.")
+
 
         raise Exception("Failed to obtain tenant_id.")
 
