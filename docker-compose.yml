@@ -4,7 +4,7 @@ services:
       context: .            # was: ./app
       dockerfile: Dockerfile
     container_name: masyg-extractor-app
-    env_file: .env
+    env_file: ${ENV_FILE:-masyg_extractor/.env}
     restart: unless-stopped
     networks: [public]
     ports: ["5000:5000"]    # publish to host; remove if you use a reverse proxy

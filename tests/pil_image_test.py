@@ -12,7 +12,7 @@ with open(local_filename, "rb") as file:
         # Open the image using PIL
         image = Image.open(file)
         image.verify()  # Verify the image is intact
-        print("Image opened and verified successfully.")
+
 
         # Re-open the image to extract text (verify() might close the image file)
         file.seek(0)  # Reset the file pointer

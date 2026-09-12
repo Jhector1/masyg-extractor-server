@@ -1,109 +1,138 @@
+from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Request, HTTPException, status, Depends, Header
-from fastapi.responses import JSONResponse
-from jose import jwt, JWTError
-import asyncio
-import concurrent.futures
-import time
-import uuid
-from werkzeug.security import generate_password_hash, check_password_hash
-from firebase_admin import auth as firebase_auth
-from firebase_admin import firestore
+from typing import Optional
 import os
 import secrets
+import uuid
 
-# Initialize Firestore client and collection reference
-firestore_db = firestore.client()
-ref = firestore_db.collection("users")
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+from fastapi import Header, HTTPException, Request, status
+from jose import JWTError, jwt
 
-# JWT settings
-SECRET_KEY = os.getenv("SECRET_KEY")  # Replace with a secure secret in production!
-ALGORITHM = os.getenv("ALGORITHM")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM") or "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "2"))
 
-def create_access_token(data: dict, expires_delta: timedelta = None):
+
+def _create_token(
+    data: dict,
+    *,
+    token_type: str,
+    expires_delta: timedelta,
+    jti: str | None = None,
+    extra_claims: dict | None = None,
+) -> str:
     now = datetime.now(timezone.utc)
-    expire = now + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode = data.copy()
-    to_encode.update({
+    payload = data.copy()
+    payload.update({
         "iat": now,
-        # "nbf": now,
-        "exp": expire,
-        "jti": str(uuid.uuid4()),          # optional: a unique ID
+        "exp": now + expires_delta,
+        "jti": jti or str(uuid.uuid4()),
+        "token_type": token_type,
     })
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-from typing import Optional
-from fastapi import Header
+    if extra_claims:
+        payload.update(extra_claims)
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
+    return _create_token(
+        data,
+        token_type="access",
+        expires_delta=expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+
+
+def create_refresh_token(
+    data: dict,
+    *,
+    session_id: str,
+    remember_me: bool = False,
+    jti: str | None = None,
+    expires_delta: timedelta | None = None,
+) -> str:
+    return _create_token(
+        data,
+        token_type="refresh",
+        expires_delta=expires_delta or timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+        jti=jti,
+        extra_claims={"session_id": session_id, "remember_me": bool(remember_me)},
+    )
+
+
+def decode_jwt_token(token: str, *, expected_type: str | None = None) -> dict:
+    payload = jwt.decode(
+        token,
+        SECRET_KEY,
+        algorithms=[ALGORITHM],
+        options={"verify_signature": True, "verify_exp": True, "verify_nbf": False},
+    )
+    if expected_type and payload.get("token_type") != expected_type:
+        raise JWTError(f"Unexpected token type: {payload.get('token_type')!r}")
+    return payload
+
 
 def get_current_user_from_cookie(
     request: Request,
-    csrf_token_header: Optional[str] = Header(None, alias="X-CSRF-Token")
+    csrf_token_header: Optional[str] = Header(None, alias="X-CSRF-Token"),
 ):
     token = request.cookies.get("access_token")
     if not token:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing access token cookie"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing access token cookie",
         )
 
     try:
-        payload = jwt.decode(token,
-                             SECRET_KEY,
-                             algorithms=[ALGORITHM],
-
-                             options={
-                                 "verify_signature": True,
-                                 "verify_exp": True,
-                                 "verify_nbf": False,  # ← disable nbf check
-                             }
-                             )
+        payload = decode_jwt_token(token, expected_type="access")
         user_id = payload.get("sub")
-        if user_id is None:
+        if not user_id:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token",
             )
 
-        # ✅ Skip CSRF checks for GET requests
+        # Safe/idempotent reads do not require CSRF validation.
         if request.method == "GET":
             return {
                 "userId": user_id,
                 "username": payload.get("username"),
-                "email": payload.get("email")
+                "email": payload.get("email"),
             }
 
-        # For POST/PUT/DELETE → enforce CSRF
         csrf_cookie = request.cookies.get("csrf_token")
         if not csrf_cookie:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="Missing CSRF token cookie"
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Missing CSRF token cookie",
             )
-        if csrf_token_header != csrf_cookie:
+        if not csrf_token_header or not secrets.compare_digest(csrf_token_header, csrf_cookie):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="CSRF token mismatch"
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CSRF token mismatch",
             )
 
         return {
             "userId": user_id,
             "username": payload.get("username"),
-            "email": payload.get("email")
+            "email": payload.get("email"),
         }
-
+    except HTTPException:
+        raise
     except JWTError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
         )
 
 
-
-def verify_jwt_token(token: str):
+def verify_jwt_token(token: str, expected_type: str | None = None) -> dict:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM],             options={"verify_nbf": False}
-)
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        return decode_jwt_token(token, expected_type=expected_type)
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-def generate_csrf_token():
+
+def generate_csrf_token() -> str:
     return secrets.token_hex(16)

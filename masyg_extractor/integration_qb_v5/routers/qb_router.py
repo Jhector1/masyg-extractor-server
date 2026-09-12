@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from typing import Dict
@@ -240,24 +241,32 @@ async def get_accounts(
         query = "SELECT * FROM Account"
 
     try:
-        resp = requests.get(url, headers=headers, params={"query": query}, timeout=20)
+        # requests is synchronous; keep the provider call off FastAPI's event loop.
+        resp = await asyncio.to_thread(
+            requests.get,
+            url,
+            headers=headers,
+            params={"query": query},
+            timeout=20,
+        )
         resp.raise_for_status()
         data = resp.json()
         accounts = (data.get("QueryResponse", {}) or {}).get("Account", []) or []
         filtered = [{"Name": a.get("Name"), "Id": a.get("Id")} for a in accounts if isinstance(a, dict)]
         return JSONResponse(content=filtered, status_code=200)
 
-    except requests.exceptions.HTTPError as http_err:
-        # Surface QB status code and a snippet of the error
-        try:
-            err = resp.json()
-        except Exception:
-            err = {"text": resp.text[:500]}
-        raise HTTPException(status_code=resp.status_code, detail={"error": "QuickBooks query failed", "details": err})
+    except requests.exceptions.HTTPError as exc:
+        status_code = getattr(exc.response, "status_code", None) or getattr(resp, "status_code", 502)
+        logger.warning("QuickBooks accounts query failed status=%s", status_code)
+        # Do not reflect QuickBooks response bodies/tokens/provider details to clients.
+        raise HTTPException(status_code=status_code, detail="QuickBooks query failed") from exc
 
-    except Exception as err:
-        logger.exception("Unexpected error in get_accounts")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {type(err).__name__}")
+    except requests.exceptions.RequestException as exc:
+        logger.warning("QuickBooks accounts request failed error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="QuickBooks service unavailable") from exc
+    except Exception as exc:
+        logger.error("Unexpected QuickBooks accounts failure error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to fetch QuickBooks accounts") from exc
 
 @router.put("/save-config")
 async def save_config(request: Request,current_user: dict = Depends(get_current_user_from_cookie)):
@@ -276,9 +285,10 @@ async def save_config(request: Request,current_user: dict = Depends(get_current_
 
     try:
         body = await request.json()
-    except Exception as e:
+    except Exception as exc:
+        logger.warning("Invalid QuickBooks config JSON error_type=%s", type(exc).__name__)
         return JSONResponse(
-            {"error": "Invalid JSON payload", "details": str(e)},
+            {"error": "Invalid JSON payload"},
             status_code=400
         )
 
@@ -301,11 +311,14 @@ async def save_config(request: Request,current_user: dict = Depends(get_current_
 
         doc_ref = db.collection("users").document(user_id)\
                     .collection("integrations").document('quickbooks')
-        doc_ref.set({"config": config}, merge=True)
+        await asyncio.to_thread(lambda: doc_ref.set({"config": config}, merge=True))
         return JSONResponse({"message": "Settings saved successfully"}, status_code=200)
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("QuickBooks config save failed error_type=%s", type(exc).__name__)
         return JSONResponse(
-            {"error": "Failed to save settings", "details": str(e)},
+            {"error": "Failed to save settings"},
             status_code=500
         )
 
@@ -343,6 +356,8 @@ global_progress: Dict[str, float] = Depends(IntegrationsProgressLog.get_file_pro
       - identifier_field: The field to filter by (e.g., "Name" or "DisplayName")
       - identifier_value: The value to search for
     """
+    if os.getenv("FAST_API_ENV", "development").lower() == "production":
+        raise HTTPException(status_code=404, detail="Not found")
     try:
         client_id = request.session.get("client_id") or 'Guest'
 
@@ -367,6 +382,8 @@ global_progress: Dict[str, float] = Depends(IntegrationsProgressLog.get_file_pro
             "identifier_value": identifier_value,
             "exists": exists
         }
-    except Exception as e:
-        logger.error(f"Error in /test-check-entity: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("QuickBooks entity check failed error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="QuickBooks entity check failed") from exc

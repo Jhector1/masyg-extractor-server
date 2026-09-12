@@ -156,7 +156,7 @@ def _recompute_is_subscribed(uid: str) -> dict:
     return patch
 
 
-def update_firestore_user(user_id: str, is_subscribed: bool = None, has_used_trial: bool = None, request: Request = None):
+def update_firestore_user(user_id: str, is_subscribed: bool = None, has_used_trial: bool = None):
     """
     Update Firestore user fields and then recompute derived isSubscribed.
     Only write direct isSubscribed if you truly want to force it (generally avoid).
@@ -164,8 +164,6 @@ def update_firestore_user(user_id: str, is_subscribed: bool = None, has_used_tri
     updates = {}
     if has_used_trial is not None:
         updates['hasUsedTrial'] = has_used_trial
-        if request and hasattr(request, "session") and "user" in request.session:
-            request.session["user"]["hasUsedTrial"] = has_used_trial
 
     # Avoid forcing isSubscribed here unless absolutely necessary.
     if updates:

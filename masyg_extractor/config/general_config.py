@@ -37,7 +37,7 @@ class DevelopmentConfig(Config):
     SESSION_COOKIE_SECURE = False  # Disable secure cookies for local development
     CACHE_TYPE = "SimpleCache"
     SERVER_PORT = 5000
-    CLIENT_URL = os.getenv("DEV_CLIENT_URL", "http://localhost:3000")
+    CLIENT_URL = os.getenv("DEV_CLIENT_URL", "http://localhost:4000")
 
 
 # class ProductionConfig(Config):
@@ -57,9 +57,9 @@ class ProductionConfig(Config):
     """Production configuration."""
     SESSION_TYPE = "redis"
     SESSION_COOKIE_DOMAIN = os.getenv('SERVER_URL', None)
-    SESSION_COOKIE_SECURE = False #True
-    SESSION_COOKIE_HTTPONLY = False #True
-    SESSION_COOKIE_SAMESITE = 'Lax'
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'None'
     SESSION_REDIS = redis.StrictRedis.from_url(
         os.getenv("REDIS_URL", "redis://localhost:6379/0")
     )

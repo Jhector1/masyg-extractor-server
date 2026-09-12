@@ -31,6 +31,7 @@ from masyg_extractor.services.image_extractor_service import compress_file_blob
 from masyg_extractor.services.firestore_helpers import (
     get_firestore_client,
     document_get,
+    document_set,
     document_update,
     document_delete,
     stream_collection,
@@ -39,7 +40,7 @@ from masyg_extractor.services.progress_log import (
     ExtractorProgressLog,
     get_extractor_progress_logger,
 )
-from masyg_extractor.services.dependencies import get_firebase_user, generate_group_id
+from masyg_extractor.services.dependencies import generate_group_id
 from masyg_extractor.services.my_log import send_log, logger
 from masyg_extractor.utils.extensions import sio
 
@@ -168,7 +169,7 @@ async def extract_data(
             "failed_count": failed,
             "failed_files": failed_files_ids,
         }
-        group_doc_ref.set({"metadata": fail_meta}, merge=True)
+        await document_set(group_doc_ref, {"metadata": fail_meta}, merge=True)
 
         await sio.emit(EVENT_PROGRESS, {"progress": 100, "file_id": None}, room=client_id)
         return {"error": "❌ Files Processing Failed"}
@@ -187,18 +188,18 @@ async def extract_data(
         "group_name": group_id,
         "isViewed": False,
     }
-    group_doc_ref.set({"metadata": metadata})
+    await document_set(group_doc_ref, {"metadata": metadata})
 
     # after: group_doc_ref.set({"metadata": metadata})
     if failed > 0:
         # track how many failed and which file doc ids we wrote
         metadata["failed_count"] = failed
         metadata["failed_files"] = failed_files_ids
-        group_doc_ref.set({"metadata": metadata}, merge=True)
+        await document_set(group_doc_ref, {"metadata": metadata}, merge=True)
 
     if files_metadata:
         metadata["files"] = files_metadata
-        group_doc_ref.set({"metadata": metadata}, merge=True)
+        await document_set(group_doc_ref, {"metadata": metadata}, merge=True)
 
     # Build the response object (files data + metadata)
     group_obj: Dict[str, Any] = {}

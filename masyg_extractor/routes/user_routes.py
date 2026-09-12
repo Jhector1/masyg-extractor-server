@@ -1,13 +1,11 @@
 import os
 import uuid
-import random
-import string
 import time
 import asyncio
 import concurrent.futures
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Request, status, BackgroundTasks, Depends,Response
+from fastapi import APIRouter, Request, status, BackgroundTasks, Depends, Response, HTTPException
 from fastapi_mail import MessageSchema
 from jose import jwt, JWTError
 from pydantic import BaseModel, EmailStr
@@ -18,12 +16,34 @@ import stripe
 
 from firebase_admin import auth as firebase_auth
 from firebase_admin import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
-from masyg_extractor.config.jwt_config import create_access_token, \
-    ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user_from_cookie, generate_csrf_token, SECRET_KEY, ALGORITHM
+from masyg_extractor.config.jwt_config import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_DAYS,
+    create_access_token,
+    create_refresh_token,
+    decode_jwt_token,
+    generate_csrf_token,
+    get_current_user_from_cookie,
+)
 from masyg_extractor.services.my_log import send_log, logger
+from masyg_extractor.services.mail_delivery import send_message_safely
+from masyg_extractor.services.auth_sessions import (
+    create_refresh_session,
+    revoke_all_refresh_sessions,
+    revoke_refresh_session,
+    rotate_refresh_session,
+)
+from masyg_extractor.services.socket_connections import socket_connections
+from masyg_extractor.security import (
+    cookie_security_options,
+    generate_password_reset_token,
+    hash_password_reset_token,
+    normalize_email,
+    reset_token_is_expired,
+)
 
-from masyg_extractor.services.data_extractor_services import get_firebase_user
 from masyg_extractor.services.firestore_helpers import document_delete, document_get, get_firestore_client
 from masyg_extractor.services.subscription_services import delete_stripe_customer_data
 
@@ -44,7 +64,7 @@ users_coll = firestore_db.collection("users")
 
 def _query_user_by_email(email):
     """Blocking Firestore query to get a user by email."""
-    docs = list(ref.where('email', '==', email).limit(1).stream())
+    docs = list(ref.where(filter=FieldFilter('email', '==', email)).limit(1).stream())
     if docs:
         doc = docs[0]
         user_data = doc.to_dict()
@@ -114,7 +134,7 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="No data provided")
 
     username = data.get('username')
-    email = data.get('email', '').lower().strip()
+    email = normalize_email(data.get('email'))
     password = data.get('password')
     is_subscribed = data.get('isSubscribed', False)
 
@@ -124,7 +144,7 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
     loop = asyncio.get_running_loop()
     existing_users = await loop.run_in_executor(
         executor,
-        lambda: list(ref.where('email', '==', email).limit(1).stream())
+        lambda: list(ref.where(filter=FieldFilter('email', '==', email)).limit(1).stream())
     )
     if existing_users:
         raise HTTPException(status_code=400, detail="Email already exists")
@@ -136,6 +156,7 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
         'password': generate_password_hash(password, method='pbkdf2:sha256'),
         'isSubscribed': is_subscribed,
         'hasUsedTrial': False,
+        'authProviders': ['password'],
         'createdAt': now_iso,  # or datetime.now().isoformat() for local time
         'lastLoginAt': now_iso,  # 👈 first login time = signup time
 
@@ -204,7 +225,7 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
     )
 
     # Schedule email sending in the background
-    background_tasks.add_task(request.app.state.mail.send_message, message)
+    background_tasks.add_task(send_message_safely, request.app.state.mail, message)
 
 
 
@@ -215,13 +236,45 @@ async def signup(request: Request,  background_tasks: BackgroundTasks):
 
 @router.post("/logout")
 async def logout(request: Request, response: Response):
-    # Expire all cookies by deleting them (access, refresh, csrf)
-    response.delete_cookie("access_token", path="/", samesite="lax")
-    response.delete_cookie("refresh_token", path="/", samesite="lax")
-    response.delete_cookie("csrf_token", path="/", samesite="lax")
+    # Revoke the current browser refresh session when possible. Invalid/legacy
+    # refresh cookies are still cleared so logout remains idempotent.
+    raw_refresh = request.cookies.get("refresh_token")
+    if raw_refresh:
+        try:
+            payload = decode_jwt_token(raw_refresh, expected_type="refresh")
+            user_id = payload.get("sub")
+            auth_session_id = payload.get("session_id")
+            if user_id and auth_session_id:
+                await revoke_refresh_session(user_id, auth_session_id)
+        except JWTError:
+            pass
 
-    # Clear server session (if used)
+    cookie_opts = cookie_security_options(os.getenv("FAST_API_ENV"))
+    response.delete_cookie(
+        "access_token", path=cookie_opts["path"],
+        secure=cookie_opts["secure"], samesite=cookie_opts["samesite"],
+    )
+    response.delete_cookie(
+        "refresh_token", path=cookie_opts["path"],
+        secure=cookie_opts["secure"], samesite=cookie_opts["samesite"],
+    )
+    response.delete_cookie(
+        "csrf_token", path=cookie_opts["path"],
+        secure=cookie_opts["secure"], samesite=cookie_opts["samesite"],
+    )
+
+    # The Starlette session owns only browser-local coordination state such as
+    # client_id; it is not an authentication source of truth. Disconnect the
+    # active Socket.IO owner before clearing/rotating that browser identity.
     if hasattr(request, "session"):
+        client_id = request.session.get("client_id")
+        if client_id:
+            sid = await socket_connections.current_sid(client_id)
+            if sid:
+                try:
+                    await sio.disconnect(sid)
+                except Exception as exc:
+                    logger.warning("Socket disconnect during logout failed error_type=%s", type(exc).__name__)
         request.session.clear()
 
     return {"message": "Logout successful"}
@@ -276,7 +329,18 @@ async def update_user_info(request: Request, current_user: dict = Depends(get_cu
 
     stripe_customer_id = user_data.get('stripeCustomerId')
     if stripe_customer_id and 'email' in updates:
-        stripe.Customer.modify(stripe_customer_id, email=updates['email'])
+        try:
+            await asyncio.to_thread(
+                stripe.Customer.modify,
+                stripe_customer_id,
+                email=updates['email'],
+            )
+        except Exception as exc:
+            logger.error("Stripe customer email update failed error_type=%s", type(exc).__name__)
+            # Firestore is already authoritative for the user profile. Surface the
+            # sync problem explicitly instead of blocking the event loop or leaking
+            # provider details.
+            raise HTTPException(status_code=502, detail="Failed to synchronize billing email") from exc
 
     return {"message": "User information updated successfully"}
 
@@ -291,134 +355,104 @@ class ResetRequest(BaseModel):
 
 @router.post("/request-reset")
 async def request_reset(request: Request, reset_req: ResetRequest, background_tasks: BackgroundTasks):
-    email = reset_req.email
-
-
+    email = normalize_email(str(reset_req.email))
     loop = asyncio.get_running_loop()
     users_query = await loop.run_in_executor(
         executor,
-        lambda: list(ref.where('email', '==', email).stream()) if ref else []
+        lambda: list(ref.where(filter=FieldFilter('email', '==', email)).limit(1).stream()) if ref else []
     )
-    # print(users_query)
+
+    # Always return the same response so this endpoint cannot be used to enumerate accounts.
     if not users_query:
-        raise HTTPException(status_code=404, detail="No account found with this email.")
+        logger.info("Password reset requested for unknown account")
+        return {"message": "If an account exists for that email, a password reset link has been sent."}
 
     user_doc = users_query[0]
-    token = ''.join(random.choices(string.ascii_letters + string.digits, k=20))
+    token, token_hash, expires_at = generate_password_reset_token(
+        ttl_minutes=int(os.getenv("PASSWORD_RESET_TTL_MINUTES", "30"))
+    )
     await loop.run_in_executor(
         executor,
-        lambda: user_doc.reference.update({'resetToken': token})
+        lambda: user_doc.reference.update({
+            'resetTokenHash': token_hash,
+            'resetTokenExpiresAt': expires_at,
+            'resetToken': firestore.DELETE_FIELD,
+        })
     )
-    # print(token)
 
     reset_url = f"{os.getenv('CLIENT_URL')}/reset-password/{token}"
-
-    # Build a modern HTML email template with inline CSS
     html_body = f"""
     <html>
-      <head>
-        <style>
-          body {{
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            padding: 20px;
-          }}
-          .container {{
-            background-color: #ffffff;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-          }}
-          h2 {{
-            color: #333333;
-          }}
-          p {{
-            color: #555555;
-            font-size: 16px;
-          }}
-          .btn {{
-            display: inline-block;
-            padding: 10px 20px;
-            margin-top: 20px;
-            background-color: #007BFF;
-            color: #ffffff;
-            text-decoration: none;
-            border-radius: 5px;
-          }}
-          .footer {{
-            margin-top: 30px;
-            font-size: 12px;
-            color: #999999;
-          }}
-        </style>
-      </head>
-      <body>
-        <div class="container">
+      <body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
+        <div style="background:#fff;max-width:600px;margin:0 auto;padding:30px;border-radius:8px;">
           <h2>Password Reset Request</h2>
-          <p>We received a request to reset your password. Click the button below to reset it:</p>
-          <a href="{reset_url}" class="btn">Reset Password</a>
-          <p>If you did not request a password reset, please ignore this email.</p>
-          <div class="footer">
-            <p>&copy; {datetime.now(timezone.utc).year} Masyg Link. All rights reserved.</p>
-          </div>
+          <p>We received a request to reset your password. This link expires shortly.</p>
+          <p><a href="{reset_url}">Reset Password</a></p>
+          <p>If you did not request a password reset, you can ignore this email.</p>
         </div>
       </body>
     </html>
     """
-
     message = MessageSchema(
         subject="Password Reset Request",
         recipients=[email],
         body=html_body,
         subtype="html"
     )
-
-    # Schedule email sending in the background
-    background_tasks.add_task(request.app.state.mail.send_message, message)
-
-    return {"message": "Password reset link sent successfully."}
-
+    background_tasks.add_task(send_message_safely, request.app.state.mail, message)
+    return {"message": "If an account exists for that email, a password reset link has been sent."}
 
 
 @router.post("/reset-password")
 async def reset_password(request: Request):
     data = await request.json()
-    token = data.get('token')
+    token = (data.get('token') or '').strip()
     new_password = data.get('password')
     if not token or not new_password:
         raise HTTPException(status_code=400, detail="Token and new password are required")
+    if len(new_password) < int(os.getenv("MIN_PASSWORD_LENGTH", "8")):
+        raise HTTPException(status_code=400, detail="Password does not meet minimum length")
 
+    token_hash = hash_password_reset_token(token)
     loop = asyncio.get_running_loop()
     user_query = await loop.run_in_executor(
         executor,
-        lambda: list(ref.where('resetToken', '==', token).stream())
+        lambda: list(ref.where(filter=FieldFilter('resetTokenHash', '==', token_hash)).limit(1).stream())
     )
     if not user_query:
         raise HTTPException(status_code=400, detail="Invalid or expired token.")
 
+    user_doc = user_query[0]
+    user_data = user_doc.to_dict() or {}
+    if reset_token_is_expired(user_data.get('resetTokenExpiresAt')):
+        await loop.run_in_executor(
+            executor,
+            lambda: user_doc.reference.update({
+                'resetTokenHash': firestore.DELETE_FIELD,
+                'resetTokenExpiresAt': firestore.DELETE_FIELD,
+            })
+        )
+        raise HTTPException(status_code=400, detail="Invalid or expired token.")
+
     hashed_password = generate_password_hash(new_password, method='pbkdf2:sha256')
-    def update_doc():
-        for doc in user_query:
-            doc.reference.update({'password': hashed_password, 'resetToken': None})
-            return True
-    result = await loop.run_in_executor(executor, update_doc)
-    if result:
-        return {"message": "Password updated successfully."}
-    raise HTTPException(status_code=400, detail="Invalid or expired token.")
+    await loop.run_in_executor(
+        executor,
+        lambda: user_doc.reference.update({
+            'password': hashed_password,
+            'authProviders': firestore.ArrayUnion(['password']),
+            'resetTokenHash': firestore.DELETE_FIELD,
+            'resetTokenExpiresAt': firestore.DELETE_FIELD,
+        })
+    )
+    # A password reset is a credential-recovery boundary. Any previously issued
+    # refresh session must stop minting access tokens immediately.
+    await revoke_all_refresh_sessions(user_doc.id)
+    return {"message": "Password updated successfully."}
 
 
 @router.post("/create-customer-portal")
 async def create_customer_portal(request: Request,  current_user: dict = Depends(get_current_user_from_cookie)):
     try:
-        # if 'user' not in request.session:
-        #     print("u44rur")
-        #     raise HTTPException(status_code=401, detail="User not logged in")
-
-        # firebase_user = request.session['user']
-        # print(user_i d, "user_id")
-
         firebase_user_id = current_user.get('userId')
         # print(firebase_user_id, "user_id")
 
@@ -436,16 +470,19 @@ async def create_customer_portal(request: Request,  current_user: dict = Depends
             # print("urur")
             raise HTTPException(status_code=400, detail="Stripe customer ID not found for the user")
 
-        session_data = stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url=os.getenv('CLIENT_URL')
+        session_data = await asyncio.to_thread(
+            lambda: stripe.billing_portal.Session.create(
+                customer=customer_id,
+                return_url=os.getenv('CLIENT_URL')
+            )
         )
         return {"url": session_data.url}
 
-    except Exception as e:
-
-
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Customer portal creation failed error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Failed to create customer portal") from exc
 
 
 from fastapi import Request, HTTPException, status, Depends
@@ -488,7 +525,7 @@ async def delete_my_account(
 
     # Retrieve the user document from Firestore using the user_id.
     doc_ref = ref.document(user_id)
-    doc = doc_ref.get()
+    doc = await asyncio.to_thread(doc_ref.get)
     if not doc.exists:
         return JSONResponse({"error": "User not found in Firestore"}, status_code=404)
     user_data = doc.to_dict()
@@ -513,6 +550,9 @@ async def delete_my_account(
             # If there is a Stripe customer ID, try to delete the associated Stripe customer data.
             if stripe_customer_id:
                 await delete_stripe_customer_data(stripe_customer_id)
+            # Firestore does not cascade-delete subcollections. Remove refresh
+            # sessions before deleting the parent user document.
+            await revoke_all_refresh_sessions(user_id)
             # Delete the user document from Firestore.
             await document_delete(user_ref)
             logger.info("Deleted account for user '%s'", user_id)
@@ -523,10 +563,30 @@ async def delete_my_account(
         logger.warning("User account '%s' not found", user_id)
         raise HTTPException(status_code=404, detail="User account not found")
 
-    return JSONResponse(
+    if hasattr(request, "session"):
+        client_id = request.session.get("client_id")
+        if client_id:
+            sid = await socket_connections.current_sid(client_id)
+            if sid:
+                try:
+                    await sio.disconnect(sid)
+                except Exception as exc:
+                    logger.warning("Socket disconnect during account deletion failed error_type=%s", type(exc).__name__)
+        request.session.clear()
+
+    response = JSONResponse(
         content={'message': 'Your account has been deleted successfully'},
         status_code=200
     )
+    cookie_opts = cookie_security_options(os.getenv("FAST_API_ENV"))
+    for cookie_name in ("access_token", "refresh_token", "csrf_token"):
+        response.delete_cookie(
+            cookie_name,
+            path=cookie_opts["path"],
+            secure=cookie_opts["secure"],
+            samesite=cookie_opts["samesite"],
+        )
+    return response
 
 
 
@@ -536,48 +596,53 @@ async def delete_my_account(
 
 
 
-
-REFRESH_TOKEN_EXPIRE_DAYS   =2
-
-# def create_access_token(data: dict, expires_delta: timedelta):
-#     # returns a JWT string, as you already have implemented
-#     return jwt.encode(
-#         {**data, "exp": datetime.now(timezone.utc).isoformat() + expires_delta},
-#         SECRET_KEY,
-#         algorithm=ALGORITHM
-#     )
-
-def create_refresh_token(data: dict) -> str:
-    return create_access_token(
-        data=data,
-        expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-    )
 
 @router.post("/login")
 async def login(request: Request, response: Response):
     # 2. Parse incoming JSON
     data           = await request.json()
-    email          = data.get("email", "").lower().strip()
+    email          = normalize_email(data.get("email"))
     password       = data.get("password")
     google_id_token= data.get("googleIdToken")
     remember_me    = data.get("rememberMe", False)
 
     # 3. Authenticate or create user
     if google_id_token:
+        login_provider = "google"
         decoded = await verify_id_token_async(google_id_token)
-        email, username = decoded["email"], decoded.get("name", "Google User")
+        email = normalize_email(decoded["email"])
+        username = decoded.get("name", "Google User")
         user = await query_user_by_email_async(email) or await add_new_user_async({
             "email": email,
             "username": username,
-            "password": generate_password_hash(uuid.uuid4().hex, method="pbkdf2:sha256"),
             "isSubscribed": False,
+            "authProviders": ["google"],
         })
     else:
+        login_provider = "password"
+        if not email or not password:
+            raise HTTPException(status_code=400, detail="Email and password are required")
+
         user = await query_user_by_email_async(email)
-        if not user or not check_password_hash(user["password"], password):
-            raise HTTPException(status_code=400, detail="Invalid credentials")
+        stored_hash = user.get("password") if user else None
+        password_ok = bool(stored_hash) and check_password_hash(stored_hash, password)
+        if not password_ok:
+            # Keep the public response generic while preserving an internal reason.
+            reason = "user_not_found" if not user else "password_mismatch"
+            logger.warning("Login rejected reason=%s", reason)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+            )
 
     user_id = user["userId"]
+
+    # Opportunistically migrate legacy accounts to explicit provider ownership.
+    # ArrayUnion is idempotent, so repeated logins do not duplicate entries.
+    await asyncio.to_thread(
+        users_coll.document(user_id).update,
+        {"authProviders": firestore.ArrayUnion([login_provider])},
+    )
 
     # ✅ 3.5. Update last login timestamp in Firestore
     await update_last_login_async(user_id)
@@ -600,28 +665,47 @@ async def login(request: Request, response: Response):
         "lastLoginAt":  user.get("lastLoginAt"),
     }
 
-    # 6. Create tokens
-    access_token  = create_access_token(
-        data={ "sub": user_id, **user_payload },
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    # 6. Create typed access/refresh credentials. Each browser login owns one
+    # server-side refresh session; only the hash of its current JTI is stored.
+    token_payload = {"sub": user_id, **user_payload}
+    access_token = create_access_token(
+        data=token_payload,
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-    refresh_token = create_refresh_token(data={ "sub": user_id, **user_payload })
+    auth_session_id = str(uuid.uuid4())
+    refresh_jti = str(uuid.uuid4())
+    refresh_token = create_refresh_token(
+        data=token_payload,
+        session_id=auth_session_id,
+        remember_me=remember_me,
+        jti=refresh_jti,
+    )
+    await create_refresh_session(
+        user_id,
+        auth_session_id,
+        refresh_jti,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+    )
 
-    # 7. Set cookies (unchanged)
+    # 7. Set cookies. Local HTTP development cannot store Secure cookies;
+    # production cross-site frontend/API deployments require Secure + SameSite=None.
+    cookie_opts = cookie_security_options(os.getenv("FAST_API_ENV"))
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=True,
-        samesite="lax"
+        secure=cookie_opts["secure"],
+        samesite=cookie_opts["samesite"],
+        path=cookie_opts["path"],
     )
 
     refresh_opts = dict(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=True,
-        samesite="lax",
+        secure=cookie_opts["secure"],
+        samesite=cookie_opts["samesite"],
+        path=cookie_opts["path"],
     )
 
     if remember_me:
@@ -633,8 +717,9 @@ async def login(request: Request, response: Response):
         key="csrf_token",
         value=csrf,
         httponly=False,
-        secure=True,
-        samesite="lax"
+        secure=cookie_opts["secure"],
+        samesite=cookie_opts["samesite"],
+        path=cookie_opts["path"],
     )
 
     # 8. Return user data
@@ -680,58 +765,89 @@ async def get_current_user(current_user: dict = Depends(get_current_user_from_co
 
 @router.post("/refresh-token")
 async def refresh_token(request: Request):
-    refresh_token = request.cookies.get("refresh_token")
-    if not refresh_token:
+    raw_refresh = request.cookies.get("refresh_token")
+    if not raw_refresh:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token missing"
+            detail="Refresh token missing",
         )
 
     try:
-        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid refresh token")
+        payload = decode_jwt_token(raw_refresh, expected_type="refresh")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-        # 🔁 Fetch user info again to rebuild the payload
-        # user = await query_user_by_id_async(user_id)  # You'll need this function
+    user_id = payload.get("sub")
+    auth_session_id = payload.get("session_id")
+    presented_jti = payload.get("jti")
+    if not user_id or not auth_session_id or not presented_jti:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-        # if not user:
-        #     raise HTTPException(status_code=404, detail="User not found")
+    # Rebuild claims from current server-side user state instead of trusting stale
+    # subscription/email claims carried by the refresh token.
+    user_doc, trial_snap = await asyncio.gather(
+        asyncio.to_thread(users_coll.document(user_id).get),
+        asyncio.to_thread(
+            users_coll.document(user_id).collection("plan").document("trial").get
+        ),
+    )
+    if not user_doc.exists:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-        # Load trial info
-        trial_ref = users_coll.document(user_id).collection("plan").document("trial")
-        trial_snap = await asyncio.to_thread(trial_ref.get)
+    user_data = user_doc.to_dict() or {}
+    has_used_trial = False
+    if trial_snap.exists:
+        has_used_trial = bool((trial_snap.to_dict() or {}).get("hasUsed", False))
 
-        has_used_trial = False
-        trial_date = None
-        if trial_snap.exists:
-            tdata = trial_snap.to_dict()
-            has_used_trial = bool(tdata.get("hasUsed", False))
-            trial_date = tdata.get("date")
-
-        # 🧠 Build consistent payload
-        token_payload = {
-        "sub": payload["sub"],
-        "username": payload["username"],
-        "email": payload["email"],
-        "isSubscribed": payload["isSubscribed"],
-        "hasUsedTrial":has_used_trial #payload["hasUsedTrial"],
+    token_payload = {
+        "sub": user_id,
+        "username": user_data.get("username"),
+        "email": user_data.get("email"),
+        "isSubscribed": user_data.get("isSubscribed", False),
+        "hasUsedTrial": has_used_trial,
     }
 
-        new_access_token = create_access_token(
-            data=token_payload,
-            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        )
+    remember_me = bool(payload.get("remember_me", False))
+    new_refresh_jti = str(uuid.uuid4())
+    refresh_expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    rotated = await rotate_refresh_session(
+        user_id,
+        auth_session_id,
+        presented_jti,
+        new_refresh_jti,
+        expires_at=refresh_expires_at,
+    )
+    if not rotated:
+        # A rotated/replayed/revoked refresh token must not mint new credentials.
+        raise HTTPException(status_code=401, detail="Refresh token expired or revoked")
 
-        new_csrf_token = generate_csrf_token()
-        response = JSONResponse(content={"message": "Token refreshed"})
-        response.set_cookie(key="access_token", value=new_access_token, httponly=True)
-        response.set_cookie(key="csrf_token", value=new_csrf_token, httponly=False)
-        return response
+    new_access_token = create_access_token(
+        data=token_payload,
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    new_refresh_token = create_refresh_token(
+        data=token_payload,
+        session_id=auth_session_id,
+        remember_me=remember_me,
+        jti=new_refresh_jti,
+    )
 
-    except JWTError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid refresh token"
-        )
+    new_csrf_token = generate_csrf_token()
+    response = JSONResponse(content={"message": "Token refreshed"})
+    cookie_opts = cookie_security_options(os.getenv("FAST_API_ENV"))
+    response.set_cookie(
+        key="access_token", value=new_access_token, httponly=True,
+        secure=cookie_opts["secure"], samesite=cookie_opts["samesite"], path=cookie_opts["path"],
+    )
+    refresh_opts = dict(
+        key="refresh_token", value=new_refresh_token, httponly=True,
+        secure=cookie_opts["secure"], samesite=cookie_opts["samesite"], path=cookie_opts["path"],
+    )
+    if remember_me:
+        refresh_opts["max_age"] = REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
+    response.set_cookie(**refresh_opts)
+    response.set_cookie(
+        key="csrf_token", value=new_csrf_token, httponly=False,
+        secure=cookie_opts["secure"], samesite=cookie_opts["samesite"], path=cookie_opts["path"],
+    )
+    return response

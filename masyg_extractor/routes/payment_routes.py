@@ -6,10 +6,15 @@ import stripe
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
 from firebase_admin import firestore
+from starlette.concurrency import run_in_threadpool
 
 from masyg_extractor.config.jwt_config import get_current_user_from_cookie
-from masyg_extractor.services.subscription_services import *  # Ensure these functions are updated to use Firestore as well
-from masyg_extractor.services.subscription_services import _recompute_is_subscribed
+from masyg_extractor.security import stripe_session_belongs_to_user
+from masyg_extractor.services.my_log import logger
+from masyg_extractor.services.subscription_services import (
+    _recompute_is_subscribed,
+    find_firestore_user,
+)
 
 # Initialize Firestore client and reference to the "users" collection.
 firestore_db = firestore.client()
@@ -40,18 +45,32 @@ async def get_publishable_key():
     }
 
 @router.get("/checkout-session")
-async def get_checkout_session(sessionId: str):
-    """
-    Retrieve an existing Checkout Session by its ID.
-    """
+async def get_checkout_session(
+    sessionId: str,
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
+    """Retrieve only a Checkout Session owned by the authenticated user."""
+    user_id = current_user.get("userId")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    user_doc = await run_in_threadpool(lambda: ref.document(user_id).get())
+    if not user_doc.exists:
+        raise HTTPException(status_code=404, detail="User not found")
+    stripe_customer_id = (user_doc.to_dict() or {}).get("stripeCustomerId")
+
     try:
-        def blocking_retrieve():
-            return stripe.checkout.Session.retrieve(sessionId)
-        checkout_session_obj = await run_in_threadpool(blocking_retrieve)
-        return checkout_session_obj
-    except Exception as e:
-        logger.error(f"Error retrieving checkout session: {e}")
-        raise HTTPException(status_code=400, detail="Error retrieving session")
+        checkout_session_obj = await run_in_threadpool(
+            lambda: stripe.checkout.Session.retrieve(sessionId)
+        )
+    except Exception as exc:
+        logger.warning("Stripe checkout session retrieval failed error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Error retrieving session") from exc
+
+    if not stripe_session_belongs_to_user(checkout_session_obj, user_id, stripe_customer_id):
+        logger.warning("Rejected checkout-session access due to ownership mismatch")
+        raise HTTPException(status_code=403, detail="Checkout session does not belong to current user")
+    return checkout_session_obj
 
 @router.post("/create-checkout-session")
 async def create_checkout_session(request : Request, current_user: dict = Depends(get_current_user_from_cookie)):
@@ -65,7 +84,7 @@ async def create_checkout_session(request : Request, current_user: dict = Depend
 
 
     doc_ref = ref.document(firebase_user_id)
-    doc = doc_ref.get()
+    doc = await run_in_threadpool(doc_ref.get)
     if not doc.exists:
         raise HTTPException(status_code=404, detail="User not found in Firestore")
     user_data = doc.to_dict()
@@ -79,7 +98,7 @@ async def create_checkout_session(request : Request, current_user: dict = Depend
                     name=user_data["username"],
                 )
             customer = await run_in_threadpool(blocking_create_customer)
-            doc_ref.update({"stripeCustomerId": customer.id})
+            await run_in_threadpool(lambda: doc_ref.update({"stripeCustomerId": customer.id}))
             stripe_customer_id = customer.id
         except Exception as e:
             logger.error(f"Error creating Stripe customer: {e}")
@@ -131,25 +150,29 @@ async def create_checkout_session(request : Request, current_user: dict = Depend
 
 @router.post("/customer-portal")
 async def customer_portal(request: Request, current_user: dict = Depends(get_current_user_from_cookie)):
-    """
-    Redirect the customer to the Stripe customer portal for subscription management.
-    """
-    form = await request.form()
-    checkout_session_id = form.get("sessionId")
+    """Open Stripe's portal using the server-owned customer ID, never a caller-supplied session owner."""
+    user_id = current_user.get("userId")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    user_doc = await run_in_threadpool(lambda: ref.document(user_id).get())
+    if not user_doc.exists:
+        raise HTTPException(status_code=404, detail="User not found")
+    stripe_customer_id = (user_doc.to_dict() or {}).get("stripeCustomerId")
+    if not stripe_customer_id:
+        raise HTTPException(status_code=400, detail="Stripe customer ID not found for the user")
+
     try:
-        def blocking_retrieve_session():
-            return stripe.checkout.Session.retrieve(checkout_session_id)
-        checkout_session_obj = await run_in_threadpool(blocking_retrieve_session)
-        def blocking_create_portal():
-            return stripe.billing_portal.Session.create(
-                customer=checkout_session_obj.customer,
-                return_url=DOMAIN,
+        portal_session = await run_in_threadpool(
+            lambda: stripe.billing_portal.Session.create(
+                customer=stripe_customer_id,
+                return_url=DOMAIN or CLIENT_URL,
             )
-        portal_session = await run_in_threadpool(blocking_create_portal)
+        )
         return RedirectResponse(url=portal_session.url, status_code=303)
-    except Exception as e:
-        logger.error(f"Error creating customer portal session: {e}")
-        raise HTTPException(status_code=400, detail="Failed to create customer portal session")
+    except Exception as exc:
+        logger.error("Error creating customer portal session error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Failed to create customer portal session") from exc
 
 
 # from fastapi import  status
@@ -161,6 +184,7 @@ from fastapi import status
 # from firebase_admin import firestore
 #
 # from masyg_extractor.config.jwt_config import get_current_user_from_cookie
+from masyg_extractor.security import stripe_session_belongs_to_user
 #
 # router = APIRouter(prefix="/payment")
 # firestore_db = firestore.client()
@@ -180,15 +204,17 @@ async def activate_free_trial(current_user: dict = Depends(get_current_user_from
 
     TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "30"))
     trial_ref = users.document(uid).collection("plan").document("trial")
-    snap = trial_ref.get()
+    snap = await run_in_threadpool(trial_ref.get)
     if snap.exists and snap.to_dict().get("hasUsed"):
         raise HTTPException(status_code=400, detail="Free trial already used")
 
     start = datetime.now(timezone.utc)
     end = start + timedelta(days=TRIAL_DAYS)
-    trial_ref.set({"hasUsed": True, "date": start, "trialEnd": end}, merge=True)
+    await run_in_threadpool(
+        lambda: trial_ref.set({"hasUsed": True, "date": start, "trialEnd": end}, merge=True)
+    )
 
-    patch = _recompute_is_subscribed(uid)  # <- derived
+    patch = await run_in_threadpool(_recompute_is_subscribed, uid)  # <- derived
     return JSONResponse({
         "hasUsed": True,
         "date": start.isoformat(),
@@ -201,6 +227,9 @@ async def activate_free_trial(current_user: dict = Depends(get_current_user_from
 async def webhook_received(request: Request):
     payload = await request.body()
     sig = request.headers.get("Stripe-Signature")
+    if not ENDPOINT_SECRET:
+        logger.error("Stripe webhook rejected because MASYG_EXTRACTOR_WEBHOOK_SECRET is not configured")
+        raise HTTPException(status_code=503, detail="Webhook is not configured")
     try:
         event = stripe.Webhook.construct_event(payload, sig, ENDPOINT_SECRET)
     except Exception as e:
@@ -224,13 +253,13 @@ async def webhook_received(request: Request):
 
     user_data, uid = (None, None)
     if customer_id:
-        user_data, uid = find_firestore_user(customer_id)
+        user_data, uid = await run_in_threadpool(find_firestore_user, customer_id)
     if not uid and client_ref:
-        snap = ref.document(client_ref).get()
+        snap = await run_in_threadpool(lambda: ref.document(client_ref).get())
         if snap.exists:
             user_data, uid = snap.to_dict(), snap.id
     if not uid and meta_uid:
-        snap = ref.document(meta_uid).get()
+        snap = await run_in_threadpool(lambda: ref.document(meta_uid).get())
         if snap.exists:
             user_data, uid = snap.to_dict(), snap.id
 
@@ -248,7 +277,7 @@ async def webhook_received(request: Request):
         "invoice.payment_failed",
         "checkout.session.completed",
     ):
-        _recompute_is_subscribed(uid)
+        await run_in_threadpool(_recompute_is_subscribed, uid)
 
 
     return JSONResponse({"status": "ok"})
@@ -264,7 +293,7 @@ async def unsubscribe(request: Request, current_user: dict = Depends(get_current
     if not firebase_user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
     doc_ref = ref.document(firebase_user_id)
-    doc = doc_ref.get()
+    doc = await run_in_threadpool(doc_ref.get)
     if not doc.exists:
         raise HTTPException(status_code=404, detail="User not found in Firestore")
     user_data = doc.to_dict()
@@ -280,9 +309,9 @@ async def unsubscribe(request: Request, current_user: dict = Depends(get_current
             def blocking_delete_subscription(subscription_id):
                 return stripe.Subscription.delete(subscription_id)
             await run_in_threadpool(blocking_delete_subscription, subscription.id)
-        _recompute_is_subscribed(firebase_user_id)  # ✅ derived from Stripe + trial
-        if "user" in request.session:
-            request.session["user"]["isSubscribed"] = False
+        await run_in_threadpool(_recompute_is_subscribed, firebase_user_id)  # derived from Stripe + trial
+        # Authentication/subscription state is server-owned (JWT + Firestore/Stripe);
+        # do not maintain a second mutable copy in request.session.
         return JSONResponse({"message": "Successfully unsubscribed"})
     except Exception as e:
         logger.error(f"Error unsubscribing user: {e}")
@@ -297,7 +326,7 @@ async def unsubscribe(request: Request, current_user: dict = Depends(get_current
 #     if not firebase_user_id:
 #         raise HTTPException(status_code=401, detail="User not logged in")
 #     doc_ref = ref.document(firebase_user_id)
-#     doc = doc_ref.get()
+#     doc = await run_in_threadpool(doc_ref.get)
 #     if not doc.exists:
 #         raise HTTPException(status_code=404, detail="User not found in Firestore")
 #     user_data = doc.to_dict()
@@ -330,17 +359,19 @@ async def unsubscribe(request: Request, current_user: dict = Depends(get_current
 #         raise HTTPException(status_code=500, detail="An unexpected error occurred")
 
 @router.post("/payment-method/delete")
-async def delete_payment_method(request: Request):
+async def delete_payment_method(
+    request: Request,
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
     """
     Delete a specific payment method for the logged-in user.
     Prevent deletion if the payment method is linked to an active subscription or free trial.
     """
-    firebase_user = request.session.get("user")
-    if not firebase_user:
+    firebase_user_id = current_user.get("userId")
+    if not firebase_user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    firebase_user_id = firebase_user.get("userId")
     doc_ref = ref.document(firebase_user_id)
-    doc = doc_ref.get()
+    doc = await run_in_threadpool(doc_ref.get)
     if not doc.exists:
         raise HTTPException(status_code=404, detail="User not found in Firestore")
     user_data = doc.to_dict()
@@ -373,6 +404,8 @@ async def delete_payment_method(request: Request):
             return stripe.PaymentMethod.detach(payment_method_id)
         await run_in_threadpool(blocking_detach)
         return JSONResponse({"message": "Payment method deleted successfully"})
+    except HTTPException:
+        raise
     except stripe.error.StripeError as e:
         logger.error(f"Stripe API error: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete payment method")
@@ -381,16 +414,18 @@ async def delete_payment_method(request: Request):
         raise HTTPException(status_code=500, detail="An unexpected error occurred")
 
 @router.post("/subscription/reactivate")
-async def reactivate_subscription(request: Request):
+async def reactivate_subscription(
+    request: Request,
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
     """
     Reactivate a subscription by creating a new one if the old one was canceled.
     """
-    firebase_user = request.session.get("user")
-    if not firebase_user:
+    firebase_user_id = current_user.get("userId")
+    if not firebase_user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    firebase_user_id = firebase_user.get("userId")
     doc_ref = ref.document(firebase_user_id)
-    doc = doc_ref.get()
+    doc = await run_in_threadpool(doc_ref.get)
     if not doc.exists:
         raise HTTPException(status_code=404, detail="User not found in Firestore")
     user_data = doc.to_dict()
@@ -412,6 +447,8 @@ async def reactivate_subscription(request: Request):
             )
         new_subscription = await run_in_threadpool(blocking_create_subscription)
         return JSONResponse({"message": "Subscription reactivated successfully", "subscriptionId": new_subscription.id})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error reactivating subscription: {e}")
         raise HTTPException(status_code=500, detail="Failed to reactivate subscription")

@@ -8,11 +8,36 @@ Run with an ASGI server such as uvicorn:
 """
 
 import os
+from pathlib import Path
 from datetime import datetime, timedelta
 
+from dotenv import load_dotenv
 from apscheduler.triggers.cron import CronTrigger
 
-# Initialize Firebase early.
+# Load local development configuration deterministically before importing modules
+# that read environment variables at import time. Runtime environment variables
+# still win because override=False. Production should inject secrets at runtime.
+_LOCAL_ENV = Path(__file__).resolve().parent / "masyg_extractor" / ".env"
+if _LOCAL_ENV.exists():
+    load_dotenv(_LOCAL_ENV, override=False)
+else:
+    load_dotenv(override=False)
+
+ENV = os.getenv("FAST_API_ENV", "development").lower()
+
+def _validate_runtime_config() -> None:
+    if ENV != "production":
+        return
+    required = ["SECRET_KEY", "ALGORITHM", "CLIENT_URL", "MASYG_EXTRACTOR_STRIPE_SECRET_KEY"]
+    missing = [name for name in required if not (os.getenv(name) or "").strip()]
+    if missing:
+        raise RuntimeError(f"Missing required production configuration: {', '.join(missing)}")
+    if os.getenv("SECRET_KEY") in {"BAD_SECRET_KEY", "fallback-secret-key"}:
+        raise RuntimeError("Refusing to start production with an insecure SECRET_KEY")
+
+_validate_runtime_config()
+
+# Initialize Firebase only after configuration has been loaded and validated.
 from masyg_extractor.firebase.firebase_init import firebase_init
 from masyg_extractor.services.maintenance import purge_expired_trash, roll_failed_to_trash, expire_free_trials
 
@@ -22,7 +47,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from masyg_extractor.services.subscription_services import _recompute_is_subscribed
 
-ENV = os.getenv("FAST_API_ENV", "development").lower()
 import logging
 import uuid
 import logging
@@ -34,23 +58,25 @@ import logging
 #     logging.getLogger("engineio.server").setLevel(logging.WARNING)
 #     # For HTTP client libraries (like httpx):
 #     logging.getLogger("httpx").setLevel(logging.WARNING)
-print(os.getenv("SERVER_URL"))
+
 import stripe
 import asyncio
 
-import urllib.parse
-from dotenv import load_dotenv, find_dotenv
 from starlette.responses import JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from masyg_extractor.services.helper import init_mail
+from masyg_extractor.services.cache import analytics_cache
 from masyg_extractor.services.my_log import SocketIOHandler, logger, log_processor
 from masyg_extractor.utils.extensions import sio
+from masyg_extractor.config.origins import ALLOWED_ORIGINS
+from masyg_extractor.services.socket_connections import (
+    SocketIdentityError,
+    resolve_session_client_id,
+    socket_connections,
+)
 
-# Load environment variables.
-load_dotenv(find_dotenv())
 
-print("Environment:", ENV)
 import psutil
 def log_mem(step):
     proc = psutil.Process(os.getpid())
@@ -66,7 +92,6 @@ import os, asyncio, uuid, urllib.parse, logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from dotenv import load_dotenv, find_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -82,11 +107,9 @@ from masyg_extractor.utils.extensions import sio
 from masyg_extractor.routes import register_routers
 from masyg_extractor.services.helper import init_mail
 
-load_dotenv(find_dotenv())
-
 ENV = os.getenv("FAST_API_ENV", "development").lower()
-SECRET_KEY = os.getenv("SECRET_KEY", "BAD_SECRET_KEY")
-CLIENT_URL = os.getenv("CLIENT_URL", "http://localhost:3000")
+SECRET_KEY = os.getenv("SECRET_KEY", "development-only-secret")
+CLIENT_URL = os.getenv("CLIENT_URL", "http://localhost:4000")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Cookie defaults (keeps domain/samesite consistent in prod)
@@ -124,6 +147,10 @@ class DefaultCookieMiddleware(BaseHTTPMiddleware):
 inner = FastAPI()
 init_mail(inner)
 
+@inner.get("/health", include_in_schema=False)
+async def health():
+    return {"status": "ok"}
+
 if ENV == "production":
   inner.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="none", https_only=True)
   inner.add_middleware(DefaultCookieMiddleware,
@@ -138,11 +165,12 @@ else:
 
 inner.add_middleware(
   CORSMiddleware,
-  allow_origins=[CLIENT_URL],
+  allow_origins=ALLOWED_ORIGINS,
   allow_credentials=True,
   allow_methods=["*"],
   allow_headers=["*"],
 )
+logging.getLogger("masyg.cors").info("Allowed browser origins=%s", ALLOWED_ORIGINS)
 stripe.set_app_info(
     'stripe-samples/checkout-single-subscription',
     version='0.0.1',
@@ -235,6 +263,15 @@ async def _startup():
     )
 
     scheduler.start()
+    inner.state.scheduler = scheduler
+
+
+@inner.on_event("shutdown")
+async def _shutdown_runtime():
+    scheduler = getattr(inner.state, "scheduler", None)
+    if scheduler and scheduler.running:
+        scheduler.shutdown(wait=False)
+    await analytics_cache.close()
 
 
 # @inner.on_event("startup")
@@ -289,13 +326,39 @@ async def get_client_id(request: Request):
 # ──────────────────────────────────────────────────────────────────────────────
 @sio.event
 async def connect(sid, environ, auth):
-  # Prefer the query param ?clientId= set by your SocketProvider
-  qs = environ.get("asgi.scope", {}).get("query_string", b"").decode()
-  params = urllib.parse.parse_qs(qs)
-  client_id = (auth or {}).get("client_id") or params.get("clientId", ["Guest"])[0]
+  scope = environ.get("asgi.scope", {})
+  try:
+    # The signed Starlette session is the authority for room ownership. The
+    # query/auth clientId may confirm it, but can never choose another room.
+    client_id = resolve_session_client_id(scope, auth)
+  except SocketIdentityError as exc:
+    logging.getLogger("masyg.socket").warning(
+        "Socket rejected sid=%s reason=%s", sid, str(exc)
+    )
+    return False
 
-  await sio.enter_room(sid, client_id)
-  await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, room=client_id)
+  previous_sid = await socket_connections.claim(client_id, sid)
+  try:
+    await sio.enter_room(sid, client_id)
+    # Send the welcome only to the newly-connected SID so a reconnect cannot
+    # duplicate it to the stale connection that is about to be replaced.
+    await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, to=sid)
+
+    if previous_sid:
+      logging.getLogger("masyg.socket").info(
+          "Replacing duplicate socket client_id=%s old_sid=%s new_sid=%s",
+          client_id, previous_sid, sid
+      )
+      try:
+        await sio.disconnect(previous_sid)
+      except Exception as exc:
+        logging.getLogger("masyg.socket").warning(
+            "Failed to disconnect stale socket sid=%s error_type=%s",
+            previous_sid, type(exc).__name__
+        )
+  except Exception:
+    await socket_connections.release(sid)
+    raise
 
   # make loop available elsewhere if you rely on it
   from masyg_extractor.services import global_executor
@@ -303,7 +366,10 @@ async def connect(sid, environ, auth):
 
 @sio.event
 async def disconnect(sid):
-  print(f"Client disconnected: {sid}")
+  client_id = await socket_connections.release(sid)
+  logging.getLogger("masyg.socket").debug(
+      "Client disconnected sid=%s client_id=%s", sid, client_id
+  )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Export ONE ASGI app: Socket.IO wrapped around FastAPI
@@ -315,4 +381,22 @@ app = inner
 
 if __name__ == "__main__":
   import uvicorn
-  uvicorn.run("server:app", host="0.0.0.0", port=int(os.getenv("SERVER_PORT", 5000)), reload=(ENV=="development"))
+
+  # Direct `python server.py` favors a single stable process. Opt into reload with
+  # UVICORN_RELOAD=1, or use `uvicorn server:app --reload` explicitly. Running the
+  # reloader from an already-imported server module initializes Firebase/mail in
+  # the parent and worker processes, which creates misleading duplicate startup logs.
+  reload_enabled = (
+      ENV == "development"
+      and (os.getenv("UVICORN_RELOAD") or "").strip().lower() in {"1", "true", "yes", "on"}
+  )
+  # With reload disabled, pass the already-created ASGI app object. Using the
+  # string "server:app" here would import this file a second time after it has
+  # already executed as __main__, duplicating Firebase/mail initialization.
+  target = "server:app" if reload_enabled else app
+  uvicorn.run(
+      target,
+      host="0.0.0.0",
+      port=int(os.getenv("SERVER_PORT", 5000)),
+      reload=reload_enabled,
+  )
