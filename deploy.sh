@@ -5,9 +5,9 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APP_DIR"
 
 echo
-echo "========================================"
+echo "=============================================="
 echo " MASYG EXTRACTOR PRODUCTION DEPLOY"
-echo "========================================"
+echo "=============================================="
 echo "Directory: $APP_DIR"
 echo "Started:   $(date)"
 echo
@@ -16,17 +16,17 @@ fail() {
   EXIT_CODE=$?
 
   echo
-  echo "========================================"
+  echo "=============================================="
   echo " ❌ DEPLOY FAILED"
-  echo "========================================"
-  echo
+  echo "=============================================="
 
+  echo
   echo "=== CONTAINER STATUS ==="
   docker compose ps 2>/dev/null || true
 
   echo
   echo "=== RECENT LOGS ==="
-  docker compose logs --tail=120 2>/dev/null || true
+  docker compose logs --tail=150 2>/dev/null || true
 
   exit "$EXIT_CODE"
 }
@@ -35,8 +35,16 @@ trap fail ERR
 
 echo "=== PREFLIGHT ==="
 
-command -v git >/dev/null
-command -v docker >/dev/null
+command -v git >/dev/null || {
+  echo "ERROR: git is not installed."
+  exit 1
+}
+
+command -v docker >/dev/null || {
+  echo "ERROR: docker is not installed."
+  exit 1
+}
+
 docker compose version
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -51,18 +59,19 @@ if [[ -z "$BRANCH" ]]; then
   exit 1
 fi
 
-echo "Branch: $BRANCH"
+echo "Branch:         $BRANCH"
 echo "Current commit: $(git rev-parse --short HEAD)"
 
 echo
-echo "=== CHECK WORKTREE ==="
+echo "=== WORKTREE CHECK ==="
 
 if [[ -n "$(git status --porcelain)" ]]; then
-  echo "ERROR: Production repository contains local changes."
+  echo "ERROR: Production repository contains local Git changes."
   echo
   git status --short
   echo
-  echo "Resolve the production changes before deploying."
+  echo "Production source should match GitHub."
+  echo "Keep secrets in .env, not tracked source files."
   exit 1
 fi
 
@@ -78,19 +87,42 @@ git pull --ff-only origin "$BRANCH"
 
 NEW_HEAD="$(git rev-parse HEAD)"
 
-echo "Previous: ${OLD_HEAD:0:12}"
-echo "Current:  ${NEW_HEAD:0:12}"
+echo
+echo "Previous commit: ${OLD_HEAD:0:12}"
+echo "Current commit:  ${NEW_HEAD:0:12}"
 
 if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
   echo "Already on latest commit."
 else
   echo
-  echo "Changes being deployed:"
-  git --no-pager log --oneline --no-decorate "$OLD_HEAD..$NEW_HEAD"
+  echo "=== COMMITS BEING DEPLOYED ==="
+  git --no-pager log \
+    --oneline \
+    --no-decorate \
+    "$OLD_HEAD..$NEW_HEAD"
 fi
 
 echo
-echo "=== VALIDATE COMPOSE ==="
+echo "=== ENVIRONMENT CHECK ==="
+
+ENV_FILE_PATH="${ENV_FILE:-.env}"
+
+if [[ ! -f "$ENV_FILE_PATH" ]]; then
+  if [[ -f .env ]]; then
+    ENV_FILE_PATH=".env"
+  elif [[ -f masyg_extractor/.env ]]; then
+    ENV_FILE_PATH="masyg_extractor/.env"
+  else
+    echo "ERROR: Production environment file was not found."
+    echo "Expected .env or masyg_extractor/.env"
+    exit 1
+  fi
+fi
+
+echo "Environment file found: $ENV_FILE_PATH"
+
+echo
+echo "=== VALIDATE DOCKER COMPOSE ==="
 
 docker compose config -q
 
@@ -103,7 +135,7 @@ echo "=== BUILD ==="
 docker compose build --pull
 
 echo
-echo "=== DEPLOY ==="
+echo "=== START / UPDATE ==="
 
 if docker compose up --help 2>&1 | grep -q -- '--wait'; then
   docker compose up \
@@ -112,29 +144,59 @@ if docker compose up --help 2>&1 | grep -q -- '--wait'; then
     --wait \
     --wait-timeout 120
 else
-  docker compose up -d --remove-orphans
+  docker compose up \
+    -d \
+    --remove-orphans
 
   echo
-  echo "Compose --wait unavailable. Waiting for startup..."
-  sleep 10
+  echo "Compose --wait is unavailable."
+  echo "Waiting 15 seconds for application startup..."
+  sleep 15
 fi
 
 echo
-echo "=== STATUS ==="
+echo "=== CONTAINER STATUS ==="
 
 docker compose ps
 
 echo
-echo "=== RECENT LOGS ==="
+echo "=== HEALTH ==="
 
-docker compose logs --tail=80
+CONTAINER_ID="$(docker compose ps -q masyg-extractor-app)"
+
+if [[ -z "$CONTAINER_ID" ]]; then
+  echo "ERROR: masyg-extractor-app container was not created."
+  exit 1
+fi
+
+HEALTH="$(
+  docker inspect \
+    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+    "$CONTAINER_ID"
+)"
+
+echo "masyg-extractor-app: $HEALTH"
+
+if [[ "$HEALTH" != "healthy" && "$HEALTH" != "running" ]]; then
+  echo "ERROR: Application is not healthy."
+  docker compose logs --tail=150 masyg-extractor-app
+  exit 1
+fi
 
 echo
-echo "========================================"
-echo " ✅ MASYG DEPLOY COMPLETE"
-echo " Commit: $(git rev-parse --short HEAD)"
-echo " Time:   $(date)"
-echo "========================================"
+echo "=== RECENT APPLICATION LOGS ==="
+
+docker compose logs \
+  --tail=100 \
+  masyg-extractor-app
+
+echo
+echo "=============================================="
+echo " ✅ MASYG EXTRACTOR DEPLOY COMPLETE"
+echo "=============================================="
+echo "Commit: $(git rev-parse --short HEAD)"
+echo "Health: $HEALTH"
+echo "Time:   $(date)"
 echo
 
 trap - ERR
