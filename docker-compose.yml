@@ -1,15 +1,25 @@
 services:
   masyg-extractor-app:
     build:
-      context: .            # was: ./app
+      context: .
       dockerfile: Dockerfile
+
     container_name: masyg-extractor-app
-    env_file: ${ENV_FILE:-masyg_extractor/.env}
+
+    env_file:
+      - ${ENV_FILE:-masyg_extractor/.env}
+
     restart: unless-stopped
-    networks: [public]
-    ports: ["5000:5000"]    # publish to host; remove if you use a reverse proxy
+
+    networks:
+      - public
+
+    ports:
+      - "5000:5000"
+
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/health"]
+      test: >-
+        python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).read()"
       interval: 20s
       timeout: 5s
       retries: 5
