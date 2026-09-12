@@ -4,6 +4,13 @@ set -Eeuo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APP_DIR"
 
+LOCK_FILE="${TMPDIR:-/tmp}/masyg-extractor-deploy.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "ERROR: Another Masyg Extractor deployment is already running."
+  exit 1
+fi
+
 echo
 echo "=============================================="
 echo " MASYG EXTRACTOR PRODUCTION DEPLOY"
@@ -45,6 +52,16 @@ command -v docker >/dev/null || {
   exit 1
 }
 
+command -v flock >/dev/null || {
+  echo "ERROR: flock is not installed (normally provided by util-linux)."
+  exit 1
+}
+
+command -v curl >/dev/null || {
+  echo "ERROR: curl is not installed."
+  exit 1
+}
+
 docker compose version
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -76,6 +93,20 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 echo "Worktree clean."
+
+echo
+echo "=== DISK SPACE CHECK ==="
+
+AVAILABLE_KB="$(df -Pk "$APP_DIR" | awk 'NR==2 {print $4}')"
+MIN_FREE_KB=$((5 * 1024 * 1024))
+
+if (( AVAILABLE_KB < MIN_FREE_KB )); then
+  echo "ERROR: Less than 5 GiB of free disk space is available for deployment."
+  df -h "$APP_DIR"
+  exit 1
+fi
+
+df -h "$APP_DIR"
 
 echo
 echo "=== UPDATE SOURCE ==="
@@ -177,11 +208,28 @@ HEALTH="$(
 
 echo "masyg-extractor-app: $HEALTH"
 
-if [[ "$HEALTH" != "healthy" && "$HEALTH" != "running" ]]; then
+if [[ "$HEALTH" != "healthy" ]]; then
   echo "ERROR: Application is not healthy."
   docker compose logs --tail=150 masyg-extractor-app
   exit 1
 fi
+
+echo
+echo "=== LOCAL HTTP SMOKE ==="
+
+curl \
+  --fail \
+  --silent \
+  --show-error \
+  --max-time 10 \
+  http://127.0.0.1:5000/health >/dev/null
+
+echo "HTTP /health: PASS"
+
+echo
+echo "=== DOCKER DISK USAGE ==="
+
+docker system df
 
 echo
 echo "=== RECENT APPLICATION LOGS ==="
