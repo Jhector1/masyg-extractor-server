@@ -2,6 +2,7 @@ from firebase_admin import firestore
 from masyg_extractor.services.my_log import logger, send_log
 from typing import Dict, Any
 import asyncio
+from masyg_extractor.integrations.accounting.shared.token_repository import get_integration_token
 
 # Initialize the Firestore client once in your app's startup.
 firestore_db = firestore.client()
@@ -219,15 +220,9 @@ def store_integration_token(user_id: str, access_token: str, refresh_token: str,
 
 
 def get_quickbooks_token(user_id: str, integration: str) -> dict:
-    """
-    Retrieves QuickBooks token data from Firestore for the given user.
-
-    Returns:
-        A dictionary containing token data if it exists, otherwise an empty dict.
-    """
-    doc_ref = firestore_db.collection("users").document(user_id) \
-        .collection("integrations").document(integration)
-    doc = doc_ref.get()
-    if doc.exists:
-        return doc.to_dict().get("tokenData", {})
-    return {}
+    # Compatibility wrapper for the generic accounting token reader.
+    return get_integration_token(
+        user_id,
+        integration,
+        db=firestore_db,
+    )

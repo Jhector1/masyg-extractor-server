@@ -1,7 +1,7 @@
 import asyncio
 from typing import Dict, List, cast
 
-from masyg_extractor.integration_qb_v5.utils import safe_uuid_key
+from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
 from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
 from masyg_extractor.integration_v4.domain.models import Customer
 from masyg_extractor.integration_v4.entity_helper import EntityHelper

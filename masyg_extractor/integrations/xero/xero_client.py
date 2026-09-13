@@ -4,7 +4,7 @@ import httpx
 from fastapi import Request
 from typing import Optional, Dict, Any
 
-from masyg_extractor.integrations.quickbooks.repository.firestore_repository import get_quickbooks_token
+from masyg_extractor.integrations.accounting.shared.token_repository import get_integration_token
 from masyg_extractor.services.my_log import logger
 from fastapi import Request, HTTPException, status
 
@@ -24,7 +24,7 @@ async def xero_request(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not authenticated"
         )
-    xero_data = await asyncio.to_thread(get_quickbooks_token, user_id, "xero")
+    xero_data = await asyncio.to_thread(get_integration_token, user_id, "xero")
     if not xero_data or "accessToken" not in xero_data or "tenant_id" not in xero_data:
         raise Exception("Access Token or Tenant ID not found")
 

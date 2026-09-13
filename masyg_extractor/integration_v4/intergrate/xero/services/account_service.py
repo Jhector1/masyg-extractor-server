@@ -8,7 +8,6 @@ from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationCli
 from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.my_log import logger
-from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
 
 
 class AccountService:

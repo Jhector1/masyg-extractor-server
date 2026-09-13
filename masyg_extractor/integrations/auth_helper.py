@@ -10,7 +10,7 @@ from cryptography.fernet import Fernet
 from masyg_extractor.integrations.quickbooks.authentication.encryption_state import encrypt_state, decrypt_state
 
 # Import your Firestore service for QuickBooks.
-from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.token_repository import IntegrationTokenRepository
 
 class AuthHelper:
     SERVER_URL = os.getenv("SERVER_URL")
@@ -120,7 +120,7 @@ class AuthHelper:
         if self.integration == "xero":
             id_token = response_json.get("id_token")
             tenant_id = get_xero_tenant_id(access_token)
-            QuickBooksFirestoreService.store_integration_token_statically(user_id, access_token, refresh_token, expires_in,  self.integration,
+            IntegrationTokenRepository.store_integration_token_statically(user_id, access_token, refresh_token, expires_in,  self.integration,
                                     id_token = id_token,tenant_id=tenant_id)
 
         # return RedirectResponse(f"{CLIENT_URL}/data/shore/xero")
@@ -129,7 +129,7 @@ class AuthHelper:
         # if self.integration == "quickbooks":
             # Calling store_integration_token with access_token, refresh_token, expires_in, and extra_value (realmId)
         else:
-            QuickBooksFirestoreService.store_integration_token_statically(user_id, access_token, refresh_token, expires_in,  self.integration,realmId = extra_value,
+            IntegrationTokenRepository.store_integration_token_statically(user_id, access_token, refresh_token, expires_in,  self.integration,realmId = extra_value,
                                    )
         # else:
         #     # Extend or override this block for other integrations.
@@ -139,7 +139,7 @@ class AuthHelper:
 
     async def refresh_token(self, user_id: str):
         # if self.integration == "quickbooks":
-        qb_service = QuickBooksFirestoreService(user_id, self.integration)
+        qb_service = IntegrationTokenRepository(user_id, self.integration)
         token_data = qb_service.get_integration_token()
         if not token_data:
             return JSONResponse({"error": f"{self.integration} integration not set up."}, status_code=401)

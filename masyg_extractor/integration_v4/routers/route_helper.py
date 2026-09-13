@@ -8,7 +8,7 @@ from masyg_extractor.integration_v4.domain.models import *
 from masyg_extractor.integration_v4.intergrate.xero.adapter import XeroClientAdapter
 from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integrations.utils import format_date
-from masyg_extractor.integrations.xero.services.item_services import generate_sku
+from masyg_extractor.integrations.accounting.shared.sku import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.log_manager import LogManager
 from masyg_extractor.services.my_log import logger

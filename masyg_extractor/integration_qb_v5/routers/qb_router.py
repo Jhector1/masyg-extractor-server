@@ -20,7 +20,6 @@ from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.document_s
 from masyg_extractor.integrations.quickbooks.repository.firestore_repository import get_quickbooks_token
 from masyg_extractor.integrations.quickbooks.services.quickbook_service import get_entities
 
-from masyg_extractor.integrations.xero.xero_client import xero_request
 from masyg_extractor.services.log_manager import LogManager
 from masyg_extractor.services.my_log import send_log, logger
 from masyg_extractor.integrations.quickbooks.authentication.quickbook_auth import router as auth_router

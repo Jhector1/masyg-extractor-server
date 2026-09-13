@@ -9,7 +9,6 @@ from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationCli
 from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integration_v4.domain.models import Item, Entity, Customer
 from masyg_extractor.services.my_log import logger, send_log
-from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request
 from masyg_extractor.services.progress_log import IntegrationsProgressLog
 
 

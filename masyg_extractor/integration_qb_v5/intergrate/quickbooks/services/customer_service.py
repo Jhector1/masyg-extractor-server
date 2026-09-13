@@ -13,8 +13,8 @@ from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
 from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.audit_log_service import AuditLogService, audit_op
 from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
-from masyg_extractor.integration_qb_v5.utils import safe_uuid_key
-from masyg_extractor.integrations.xero.services.item_services import generate_sku
+from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
+from masyg_extractor.integrations.accounting.shared.sku import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.my_log import logger
 #get_customers

@@ -9,7 +9,7 @@ from masyg_extractor.integration_qb_v5.intergrate.quickbooks.adapter import Quic
 from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integration_qb_v5.utils import parse_int, parse_float
 from masyg_extractor.integrations.utils import format_date
-from masyg_extractor.integrations.xero.services.item_services import generate_sku
+from masyg_extractor.integrations.accounting.shared.sku import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.log_manager import LogManager
 from masyg_extractor.services.my_log import logger

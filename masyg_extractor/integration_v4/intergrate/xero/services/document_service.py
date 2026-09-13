@@ -2,7 +2,7 @@ import asyncio
 from pprint import pprint
 from typing import List, Dict, Any
 
-from masyg_extractor.integration_qb_v5.utils import safe_uuid_key
+from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
 from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
 from masyg_extractor.integration_v4.domain.models import Document
 from masyg_extractor.integration_v4.entity_helper import EntityHelper
