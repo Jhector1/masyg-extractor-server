@@ -73,7 +73,7 @@ def test_xero_uses_its_current_adapter_and_repository_owners():
         "import IntegrationClientAdapter"
     ) in entity_helper
     assert (
-        "from masyg_extractor.integration_v4.repository.firestore_repository "
+        "from masyg_extractor.integrations.accounting.shared.firestore_repository "
         "import QuickBooksFirestoreService"
     ) in entity_helper
     assert (
@@ -81,6 +81,6 @@ def test_xero_uses_its_current_adapter_and_repository_owners():
         "import IntegrationClientAdapter"
     ) in adapter
     assert (
-        "from masyg_extractor.integration_v4.repository.firestore_repository "
+        "from masyg_extractor.integrations.accounting.shared.firestore_repository "
         "import QuickBooksFirestoreService"
     ) in account_service

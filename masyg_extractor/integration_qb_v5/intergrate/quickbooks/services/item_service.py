@@ -4,12 +4,12 @@ from typing import Dict, List, Optional, cast
 
 from fastapi import Request
 
-from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
-from masyg_extractor.integration_qb_v5.domain.models import Item, Customer
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.models import Item, Customer
 from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
 from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.audit_log_service import AuditLogService, audit_op
-from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
 from masyg_extractor.integrations.accounting.shared.sku import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
@@ -306,5 +306,3 @@ db.collection("users").collection(user_id).collection("audit_logs")
             logger.error(f"Error creating items in bulk: {str(e)}")
             # In a hard failure, any PENDING events will remain; caller can retry or you can add a batch fail here.
             return {}
-
-

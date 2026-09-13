@@ -3,11 +3,11 @@ from fastapi import APIRouter, Request, HTTPException, status, Depends
 from fastapi.responses import JSONResponse
 
 from masyg_extractor.config.jwt_config import get_current_user_from_cookie
-from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
 from masyg_extractor.integration_v4.intergrate.xero.services.account_service import AccountService
 
 from masyg_extractor.integration_v4.intergrate.xero.services.invoice_service import InvoiceService
-from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integration_v4.routers.route_helper import normalize_payload, handle_quickbooks_request
 from masyg_extractor.integration_v4.intergrate.xero.adapter import XeroClientAdapter
 from masyg_extractor.integration_v4.intergrate.xero.services.document_service import DocumentService

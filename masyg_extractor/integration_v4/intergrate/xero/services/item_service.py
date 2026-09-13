@@ -5,11 +5,11 @@ from typing import Dict, List, Optional, cast
 from fastapi import Request
 
 from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
-from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
-from masyg_extractor.integration_v4.domain.models import Item
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.models import Item
 from masyg_extractor.integration_v4.entity_helper import EntityHelper
 from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationClientAdapter
-from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integration_v4.utils import extract_uuid
 from masyg_extractor.integrations.accounting.shared.sku import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric

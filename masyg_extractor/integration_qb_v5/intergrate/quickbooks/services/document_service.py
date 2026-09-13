@@ -5,8 +5,8 @@ from typing import List, Dict, Any, Iterable, Optional
 
 from fastapi import Request
 
-from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
-from masyg_extractor.integration_qb_v5.domain.models import Item, Customer, Invoice, Document
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.models import Item, Customer, Invoice, Document
 from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
 from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.audit_log_service import (
@@ -15,7 +15,7 @@ from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.audit_log_
 )
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.customer_service import CustomerService
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.item_service import ItemService
-from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.accounting.shared.sku import generate_sku

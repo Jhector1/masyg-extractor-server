@@ -8,12 +8,12 @@ from fastapi.responses import JSONResponse
 from firebase_admin import firestore
 
 from masyg_extractor.config.jwt_config import get_current_user_from_cookie
-from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
 from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.account_service import AccountService
 
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.invoice_service import InvoiceService
-from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integration_qb_v5.routers.route_helper import normalize_payload, handle_quickbooks_request
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.adapter import QuickBooksClientAdapter
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.document_service import DocumentService

@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Union
 from fastapi import APIRouter, Request, HTTPException, status, Depends
 
 from masyg_extractor.global_helper import transform_value
-from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
-from masyg_extractor.integration_qb_v5.domain.models import *
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.models import *
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.adapter import QuickBooksClientAdapter
-from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integration_qb_v5.utils import parse_int, parse_float
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.accounting.shared.sku import generate_sku

@@ -2,11 +2,11 @@ import asyncio
 from typing import Dict, List, cast
 
 from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
-from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
-from masyg_extractor.integration_v4.domain.models import Customer
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.models import Customer
 from masyg_extractor.integration_v4.entity_helper import EntityHelper
 from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationClientAdapter
-from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integration_v4.utils import extract_uuid
 from masyg_extractor.services.my_log import logger
 

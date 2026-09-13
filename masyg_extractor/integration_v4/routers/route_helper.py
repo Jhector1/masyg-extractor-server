@@ -3,10 +3,10 @@ from typing import Union
 from fastapi import Request
 
 from masyg_extractor.global_helper import transform_value
-from masyg_extractor.integration_v4.core.integration_context import IntegrationContext
-from masyg_extractor.integration_v4.domain.models import *
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.models import *
 from masyg_extractor.integration_v4.intergrate.xero.adapter import XeroClientAdapter
-from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.accounting.shared.sku import generate_sku
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric

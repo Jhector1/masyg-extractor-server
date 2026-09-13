@@ -6,8 +6,8 @@ from fastapi.responses import JSONResponse
 
 from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
 from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationClientAdapter
-from masyg_extractor.integration_v4.repository.firestore_repository import QuickBooksFirestoreService
-from masyg_extractor.integration_v4.domain.models import Item, Entity, Customer
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.core.models import Item, Entity, Customer
 from masyg_extractor.services.my_log import logger, send_log
 from masyg_extractor.services.progress_log import IntegrationsProgressLog
 

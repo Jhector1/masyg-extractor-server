@@ -2,10 +2,10 @@ import asyncio
 from collections import defaultdict
 from typing import Optional, Dict, Any, List, Union
 
-from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
 from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
-from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
-from masyg_extractor.integration_qb_v5.domain.models import Item, Entity
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.core.models import Item, Entity
 from masyg_extractor.services.my_log import logger
 from masyg_extractor.services.progress_log import IntegrationsProgressLog
 

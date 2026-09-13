@@ -1,11 +1,11 @@
 from typing import Dict, Any, Optional
 from fastapi import Request
 
-from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
-from masyg_extractor.integration_qb_v5.domain.models import Account
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.models import Account
 from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
 from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
-from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.my_log import logger
 from masyg_extractor.integrations.quickbooks.quickbooks_client import quickbooks_request

@@ -1,14 +1,14 @@
 
 from typing import List, Dict, Any, Optional
 
-from masyg_extractor.integration_qb_v5.core.integration_context import IntegrationContext
-from masyg_extractor.integration_qb_v5.domain.models import Item, Customer, Invoice, SalesReceipt, Document
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.models import Item, Customer, Invoice, SalesReceipt, Document
 from masyg_extractor.integration_qb_v5.entity_helper import EntityHelper
 from masyg_extractor.integration_qb_v5.intergrate.baseAdapter import IntegrationClientAdapter
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.audit_log_service import audit_op
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.document_service import DocumentService
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.item_service import ItemService
-from masyg_extractor.integration_qb_v5.repository.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 
 from masyg_extractor.integration_qb_v5.intergrate.quickbooks.services.customer_service import CustomerService
 
