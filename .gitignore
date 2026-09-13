@@ -14,3 +14,15 @@ venv/
 .DS_Store
 **/.DS_Store
 *.log
+
+# Local / production secrets
+.env
+.env.*
+!.env.example
+
+# Production/local compose overrides
+docker-compose.override.yml
+
+# Deployment backups
+docker-compose.yml.bak.*
+docker-compose.yml.before-deploy-cleanup

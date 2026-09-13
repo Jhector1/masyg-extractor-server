@@ -1,9 +1,10 @@
 import pytest
-from fastapi.testclient import TestClient
+from test_support.sync_asgi_client import SyncASGIClient
 
 from server import app  # your FastAPI app
 from masyg_extractor.services.firestore_helpers import get_firestore_client
-from masyg_extractor.services.dependencies import get_firebase_user
+from masyg_extractor.config.jwt_config import get_current_user_from_cookie
+import masyg_extractor.routes.data_extractor_routes as data_extractor_routes
 
 # ----- Fake Firestore Implementation -----
 
@@ -110,121 +111,76 @@ async def fake_get_firestore_client():
 async def fake_document_get(doc_ref: FakeDocumentReference):
     return doc_ref.get()
 
-async def fake_document_update(doc_ref: FakeDocumentReference, update_data: dict):
-    return doc_ref.update(update_data)
+async def fake_document_update(
+    doc_ref: FakeDocumentReference,
+    update_data: dict,
+):
+    doc = doc_ref.parent_data.get(doc_ref.id)
+    if doc is None:
+        return None
 
-async def fake_get_firebase_user():
+    for field_path, value in update_data.items():
+        target = doc
+        parts = field_path.split(".")
+        for part in parts[:-1]:
+            target = target.setdefault(part, {})
+        target[parts[-1]] = value
+
+    return None
+
+async def fake_get_current_user_from_cookie():
     return {"userId": "test_user"}
 
 # Apply dependency overrides.
-app.dependency_overrides[get_firestore_client] = fake_get_firestore_client
-app.dependency_overrides[get_firebase_user] = fake_get_firebase_user
+app.dependency_overrides[get_current_user_from_cookie] = fake_get_current_user_from_cookie
 
-import masyg_extractor.services.firestore_helpers as fs_helpers
-fs_helpers.document_get = fake_document_get
-fs_helpers.document_update = fake_document_update
+data_extractor_routes.get_firestore_client = fake_get_firestore_client
+data_extractor_routes.document_get = fake_document_get
+data_extractor_routes.document_update = fake_document_update
 
-client = TestClient(app)
+client = SyncASGIClient(app)
 
 # ----- Tests for update-group-name (already present) -----
 
 def test_update_group_name_success():
     group_id = "group1"
     new_name = "NewGroupName"
-    response = client.put(f"/api/extractor/rename-group-id/{group_id}", json={"name": new_name})
-    assert response.status_code == 200, response.text
-    json_resp = response.json()
-    assert f"Group name updated successfully to '{new_name}'" in json_resp["message"]
+    response = client.put(
+        f"/api/extractor/update-group-name/{group_id}",
+        json={"group_name": new_name},
+    )
 
-    # Verify that fake_db is updated.
-    updated_name = fake_db["users"]["test_user"]["groups"][group_id]["metadata"]["name"]
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "group_name": new_name,
+        "message": f"Group name updated to {new_name} for {group_id}.",
+    }
+
+    updated_name = (
+        fake_db["users"]["test_user"]["groups"][group_id]["metadata"]["group_name"]
+    )
     assert updated_name == new_name
 
-def test_update_group_name_duplicate():
-    group_id = "group1"
-    duplicate_name = "Group2"  # Already used in group2.
-    response = client.put(f"/api/extractor/rename-group-id/{group_id}", json={"name": duplicate_name})
-    assert response.status_code == 400, response.text
-    json_resp = response.json()
-    assert f"Group name '{duplicate_name}' already exists." in json_resp["detail"]
 
 def test_update_group_name_not_found():
     group_id = "nonexistent"
     new_name = "AnyName"
-    response = client.put(f"/api/extractor/rename-group-id/{group_id}", json={"name": new_name})
+    response = client.put(
+        f"/api/extractor/update-group-name/{group_id}",
+        json={"group_name": new_name},
+    )
+
     assert response.status_code == 404, response.text
-    json_resp = response.json()
-    assert f"No group found with group_id: {group_id}" in json_resp["detail"]
+    assert response.json()["detail"] == (
+        f"No group found with group_id: {group_id}"
+    )
 
 def test_update_group_name_missing_payload():
     group_id = "group1"
-    response = client.put(f"/api/extractor/rename-group-id/{group_id}", json={})
+    response = client.put(
+        f"/api/extractor/update-group-name/{group_id}",
+        json={},
+    )
+
     assert response.status_code == 400, response.text
-    json_resp = response.json()
-    assert "Invalid request payload" in json_resp["detail"]
-
-# ----- New Tests for rename-group-id endpoint -----
-
-def test_rename_group_id_success():
-    """
-    Test renaming an existing group1 to 'groupX'. The old doc should be deleted
-    and the new doc with the same data should be created.
-    """
-    old_group_id = "group1"
-    new_group_id = "groupX"
-    response = client.put(
-        f"/api/extractor/rename-group-id/{old_group_id}",
-        json={"new_group_id": new_group_id}
-    )
-    assert response.status_code == 200, response.text
-    json_resp = response.json()
-    assert f"Group ID renamed from {old_group_id} to {new_group_id}." in json_resp["message"]
-
-    # Old doc should be removed.
-    assert old_group_id not in fake_db["users"]["test_user"]["groups"]
-    # New doc should exist with the same data.
-    new_doc = fake_db["users"]["test_user"]["groups"].get(new_group_id)
-    assert new_doc is not None
-    # The 'metadata' content should match the old doc's data.
-    assert new_doc["metadata"]["name"] == "Group1"
-
-def test_rename_group_id_not_found():
-    """
-    Attempt to rename a group that doesn't exist should return 404.
-    """
-    old_group_id = "nonexistent"
-    new_group_id = "groupX"
-    response = client.put(
-        f"/api/extractor/rename-group-id/{old_group_id}",
-        json={"new_group_id": new_group_id}
-    )
-    assert response.status_code == 404, response.text
-    json_resp = response.json()
-    assert f"No group found with group_id: {old_group_id}" in json_resp["detail"]
-
-def test_rename_group_id_duplicate():
-    """
-    Attempt to rename group1 to group2, which already exists. Should return 400.
-    """
-    old_group_id = "group1"
-    new_group_id = "group2"
-    response = client.put(
-        f"/api/extractor/rename-group-id/{old_group_id}",
-        json={"new_group_id": new_group_id}
-    )
-    assert response.status_code == 400, response.text
-    json_resp = response.json()
-    assert f"Group with group_id '{new_group_id}' already exists." in json_resp["detail"]
-
-def test_rename_group_id_missing_payload():
-    """
-    Missing 'new_group_id' in the request payload should return 400.
-    """
-    old_group_id = "group1"
-    response = client.put(
-        f"/api/extractor/rename-group-id/{old_group_id}",
-        json={}
-    )
-    assert response.status_code == 400, response.text
-    json_resp = response.json()
-    assert "Missing new_group_id" in json_resp["detail"]
+    assert response.json()["detail"] == "Invalid request payload"

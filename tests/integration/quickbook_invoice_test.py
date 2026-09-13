@@ -19,7 +19,7 @@ if global_executor.MAIN_LOOP is None:
     global_executor.MAIN_LOOP = asyncio.new_event_loop()
 
 # Also force the MAIN_LOOP in the quickbook_data module to be the same.
-import masyg_extractor.integrations.services.invoice_service as qb_data
+import masyg_extractor.integrations.quickbooks.services.invoice_service as qb_data
 
 qb_data.MAIN_LOOP = global_executor.MAIN_LOOP
 
@@ -109,10 +109,10 @@ class TestFirestoreRecords(TestCase):
         return transaction_doc
 
     # --- Existence Check Tests ---
-    @patch("masyg_extractor.integrations.repository.firestore_repository.firestore_db")
+    @patch("masyg_extractor.integrations.quickbooks.repository.firestore_repository.firestore_db")
     def test_customer_exists_in_firestore(self, mock_firestore_db):
         """Test that Firestore correctly identifies an existing customer."""
-        from masyg_extractor.integrations.repository.firestore_repository import customer_exists_in_firestore
+        from masyg_extractor.integrations.quickbooks.repository.firestore_repository import customer_exists_in_firestore
 
         user_id = "user123"
         customer_id = "customer789"
@@ -128,10 +128,10 @@ class TestFirestoreRecords(TestCase):
         self.assertTrue(any("Result: True" in record for record in log_capture.output))
         # Removed strict expected log assertion.
 
-    @patch("masyg_extractor.integrations.repository.firestore_repository.firestore_db")
+    @patch("masyg_extractor.integrations.quickbooks.repository.firestore_repository.firestore_db")
     def test_customer_does_not_exist_in_firestore(self, mock_firestore_db):
         """Test that Firestore correctly identifies a missing customer."""
-        from masyg_extractor.integrations.repository.firestore_repository import customer_exists_in_firestore
+        from masyg_extractor.integrations.quickbooks.repository.firestore_repository import customer_exists_in_firestore
 
         user_id = "user123"
         customer_id = "customer789"
@@ -146,10 +146,10 @@ class TestFirestoreRecords(TestCase):
         self.assertTrue(any("Result: False" in record for record in log_capture.output))
         # Removed strict expected log assertion.
 
-    @patch("masyg_extractor.integrations.repository.firestore_repository.firestore_db")
+    @patch("masyg_extractor.integrations.quickbooks.repository.firestore_repository.firestore_db")
     def test_invoice_exists_in_firestore(self, mock_firestore_db):
         """Test that Firestore correctly identifies an existing invoice."""
-        from masyg_extractor.integrations.repository.firestore_repository import invoice_exists_in_firestore
+        from masyg_extractor.integrations.quickbooks.repository.firestore_repository import invoice_exists_in_firestore
 
         user_id = "user123"
         record_type = "invoices"
@@ -166,10 +166,10 @@ class TestFirestoreRecords(TestCase):
         self.assertTrue(any("Result: True" in record for record in log_capture.output))
         # Removed strict expected log assertion.
 
-    @patch("masyg_extractor.integrations.repository.firestore_repository.firestore_db")
+    @patch("masyg_extractor.integrations.quickbooks.repository.firestore_repository.firestore_db")
     def test_invoice_does_not_exist_in_firestore(self, mock_firestore_db):
         """Test that Firestore correctly identifies a missing invoice."""
-        from masyg_extractor.integrations.repository.firestore_repository import invoice_exists_in_firestore
+        from masyg_extractor.integrations.quickbooks.repository.firestore_repository import invoice_exists_in_firestore
 
         user_id = "user123"
         record_type = "invoices"
@@ -187,10 +187,10 @@ class TestFirestoreRecords(TestCase):
         # Removed strict expected log assertion.
 
     # --- Store Record Tests ---
-    @patch("masyg_extractor.integrations.repository.firestore_repository.firestore_db")
+    @patch("masyg_extractor.integrations.quickbooks.repository.firestore_repository.firestore_db")
     def test_store_customer_record_valid(self, mock_firestore_db):
         """Test that store_customer_record properly stores a customer record in Firestore."""
-        from masyg_extractor.integrations.repository.firestore_repository import store_customer_record
+        from masyg_extractor.integrations.quickbooks.repository.firestore_repository import store_customer_record
 
         user_id = "user123"
         customer_data = {"Id": "customer789", "DisplayName": "Customer Test"}
@@ -217,10 +217,9 @@ class TestFirestoreRecords(TestCase):
         customer_doc.set.assert_called_once_with(customer_data)
         self.assertTrue(any("Stored customer record" in record for record in log_capture.output))
 
-    @patch("masyg_extractor.integrations.repository.firestore_repository.firestore_db")
+    @patch("masyg_extractor.integrations.quickbooks.repository.firestore_repository.firestore_db")
     def test_store_invoice_record_valid(self, mock_firestore_db):
         """Test that store_invoice_record properly stores an invoice record in Firestore."""
 
         user_id = "user123"
         record_type = "invoices"
-

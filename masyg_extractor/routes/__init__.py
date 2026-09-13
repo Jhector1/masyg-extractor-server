@@ -1,8 +1,7 @@
 import os
 from fastapi import FastAPI
 
-from masyg_extractor.integration_qb_v5.routers.qb_router import router as quickbook_router
-from masyg_extractor.integration_v4.routers.xero_router import router as xero_router
+from masyg_extractor.integrations.accounting.registry import iter_accounting_routers
 
 from .admin.admin_webhook import router as webhook_router
 from .csrf_routes import csrf_router
@@ -26,8 +25,8 @@ def register_routers(app: FastAPI):
     app.include_router(webhook_router, prefix="/api")
     app.include_router(csrf_router)
 
-    app.include_router(quickbook_router, prefix="")
-    app.include_router(xero_router, prefix="")
+    for accounting_router in iter_accounting_routers():
+        app.include_router(accounting_router, prefix="")
     app.include_router(analytics_router, prefix="/api")
 
     # Debug mutation endpoints must never be exposed in production.

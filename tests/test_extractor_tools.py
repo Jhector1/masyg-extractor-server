@@ -21,6 +21,8 @@ from masyg_extractor.services.image_extractor_service import (
     compress_pdf,
     compress_file_blob,
 )
+import asyncio
+import masyg_extractor.services.file_extractor_service as file_extractor_service
 
 # --- Helpers for tests ---
 
@@ -226,25 +228,60 @@ def test_extract_json_from_code_block():
     Some extra text.
     """
     json_content = extract_json_from_code_block(text)
-    assert json_content == '{"key": "value"}'
+    assert json_content == {"key": "value"}
 
 def test_process_text_with_gpt(monkeypatch):
-    # Monkey-patch openai.ChatCompletion.create to return a fixed response.
-    fake_response = {
-        "choices": [{
-            "message": {
-                "content": "```json\n{\"vendor_name\": \"Test Vendor\", \"date\": \"2025-03-07\", \"tax\": \"0.00\", \"line_items\": []}\n```"
-            }
-        }]
-    }
-    def fake_create(*args, **kwargs):
-        return fake_response
+    async def fake_process_chunk(
+        chunk,
+        progress_logger,
+        chunk_weight,
+    ):
+        assert chunk == "Sample text for GPT processing"
+        assert progress_logger is not None
+        assert chunk_weight == (
+            file_extractor_service.ExtractorProgressLog.GPT_PROCESSING_WEIGHT
+        )
+        return {
+            "vendor_name": "Test Vendor",
+            "date": "2025-03-07",
+            "tax": "0.00",
+            "line_items": [],
+        }
 
-    monkeypatch.setattr("openai.ChatCompletion.create", fake_create)
-    sample_text = "Sample text for GPT processing"
-    json_content = process_text_with_gpt(sample_text)
-    data = json.loads(json_content)
-    assert data.get("vendor_name") == "Test Vendor"
-    assert data.get("line_items") == []
+    async def fake_emit_progress_resilient(
+        progress_logger,
+        progress,
+    ):
+        assert progress_logger is not None
+        assert progress["gpt_processing"] == (
+            file_extractor_service.ExtractorProgressLog.GPT_PROCESSING_WEIGHT
+        )
+
+    monkeypatch.setattr(
+        file_extractor_service,
+        "process_chunk",
+        fake_process_chunk,
+    )
+    monkeypatch.setattr(
+        file_extractor_service,
+        "_emit_progress_resilient",
+        fake_emit_progress_resilient,
+    )
+
+    progress = {}
+    result = asyncio.run(
+        process_text_with_gpt(
+            "Sample text for GPT processing",
+            progress_logger=object(),
+            progress=progress,
+            files_count=1,
+        )
+    )
+
+    assert result["vendor_name"] == "Test Vendor"
+    assert result["line_items"] == []
+    assert progress["gpt_processing"] == (
+        file_extractor_service.ExtractorProgressLog.GPT_PROCESSING_WEIGHT
+    )
 
 # To run all tests from the command line, execute: pytest -v

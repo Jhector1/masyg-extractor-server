@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import logging
 
-from masyg_extractor.integrations.services.invoice_service import InvoiceService
+from masyg_extractor.integrations.quickbooks.services.invoice_service import InvoiceService
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -25,7 +25,7 @@ class TestBulkSendInvoices(unittest.TestCase):
         self.client = TestClient(app)
         # Patch the session used in quickbooks_client with required dummy values.
         self.session_patch = patch(
-            'masyg_extractor.integrations.quickbooks_client.session',
+            'masyg_extractor.integrations.quickbooks.quickbooks_client.session',
             new={"access_token": "dummy_access_token", "realm_id": "dummy_realm_id"},
             create=True
         )
@@ -127,16 +127,16 @@ class TestBulkSendInvoices(unittest.TestCase):
             with self.subTest(scenario=sc["name"]):
                 # Patch the functions in the namespace of invoice_service.
                 with patch(
-                        'masyg_extractor.integrations.services.invoice_service.invoice_exists_in_firestore') as mock_invoice_exists, \
+                        'masyg_extractor.integrations.quickbooks.services.invoice_service.invoice_exists_in_firestore') as mock_invoice_exists, \
                         patch(
-                            'masyg_extractor.integrations.services.invoice_service.get_or_create_customer') as mock_get_or_create_customer, \
+                            'masyg_extractor.integrations.quickbooks.services.invoice_service.get_or_create_customer') as mock_get_or_create_customer, \
                         patch(
-                            'masyg_extractor.integrations.services.invoice_service.check_item_exists') as mock_check_item_exists, \
-                        patch('masyg_extractor.integrations.services.invoice_service.create_item') as mock_create_item, \
+                            'masyg_extractor.integrations.quickbooks.services.invoice_service.check_item_exists') as mock_check_item_exists, \
+                        patch('masyg_extractor.integrations.quickbooks.services.invoice_service.create_item') as mock_create_item, \
                         patch(
-                            'masyg_extractor.integrations.services.invoice_service.quickbooks_request') as mock_quickbooks_request, \
+                            'masyg_extractor.integrations.quickbooks.services.invoice_service.quickbooks_request') as mock_quickbooks_request, \
                         patch(
-                            'masyg_extractor.integrations.services.invoice_service.store_invoice_record') as mock_store_invoice_record:
+                            'masyg_extractor.integrations.quickbooks.services.invoice_service.store_invoice_record') as mock_store_invoice_record:
 
                     # Create a dummy request object.
                     dummy_request = MagicMock()

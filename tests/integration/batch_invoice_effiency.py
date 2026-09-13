@@ -13,7 +13,7 @@ except ValueError:
 
 # Import firebase_init and InvoiceService after Firebase is initialized.
 from masyg_extractor.firebase.firebase_init import firebase_init
-from masyg_extractor.integrations.services.invoice_service import InvoiceService
+from masyg_extractor.integrations.quickbooks.services.invoice_service import InvoiceService
 
 # Optionally call firebase_init() if your module performs additional setup.
 firebase_init()
@@ -37,12 +37,12 @@ class TestBatchInvoicesEfficiency(unittest.TestCase):
     def tearDown(self):
         pass
 
-    @patch('masyg_extractor.integrations.services.invoice_service.invoice_exists_in_firestore')
-    @patch('masyg_extractor.integrations.services.invoice_service.quickbooks_request')
-    @patch('masyg_extractor.integrations.services.invoice_service.get_or_create_customer')
-    @patch('masyg_extractor.integrations.services.invoice_service.check_item_exists')
-    @patch('masyg_extractor.integrations.services.invoice_service.create_item')
-    @patch('masyg_extractor.integrations.services.invoice_service.store_invoice_record')
+    @patch('masyg_extractor.integrations.quickbooks.services.invoice_service.invoice_exists_in_firestore')
+    @patch('masyg_extractor.integrations.quickbooks.services.invoice_service.quickbooks_request')
+    @patch('masyg_extractor.integrations.quickbooks.services.invoice_service.get_or_create_customer')
+    @patch('masyg_extractor.integrations.quickbooks.services.invoice_service.check_item_exists')
+    @patch('masyg_extractor.integrations.quickbooks.services.invoice_service.create_item')
+    @patch('masyg_extractor.integrations.quickbooks.services.invoice_service.store_invoice_record')
     def test_batch_invoices_efficiency(
         self,
         mock_store_record,
