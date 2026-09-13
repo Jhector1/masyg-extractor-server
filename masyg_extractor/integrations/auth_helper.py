@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from fastapi import Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from cryptography.fernet import Fernet
-from masyg_extractor.integrations.quickbooks.authentication.encryption_state import encrypt_state, decrypt_state
+from masyg_extractor.integrations.accounting.shared.oauth_state import encrypt_state, decrypt_state
 
 # Import your Firestore service for QuickBooks.
 from masyg_extractor.integrations.accounting.shared.token_repository import IntegrationTokenRepository
@@ -235,8 +235,7 @@ def get_xero_tenant_id(access_token: str):
 # from cryptography.fernet import Fernet
 # import os
 #
-# from masyg_extractor.integrations.quickbooks.authentication.encryption_state import encrypt_state, decrypt_state
-# from masyg_extractor.integrations.quickbooks.repository.firestore_repository import firestore_db, \
+# from masyg_extractor.integrations.accounting.shared.oauth_state import encrypt_state, decrypt_state
 #      store_integration_token
 # # QuickBooks
 #

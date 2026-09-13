@@ -4,89 +4,58 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-CANONICAL_CONTEXT = (
-    "masyg_extractor.integrations.accounting.core.integration_context"
-)
-CANONICAL_MODELS = "masyg_extractor.integrations.accounting.core.models"
-CANONICAL_REPOSITORY = (
-    "masyg_extractor.integrations.accounting.shared.firestore_repository"
+CANONICAL_SHARED_FILES = (
+    ROOT / "masyg_extractor/integrations/accounting/core/integration_context.py",
+    ROOT / "masyg_extractor/integrations/accounting/core/models.py",
+    ROOT / "masyg_extractor/integrations/accounting/shared/firestore_repository.py",
 )
 
-VERSIONED_OWNERS = {
-    "masyg_extractor.integration_qb_v5.core.integration_context",
-    "masyg_extractor.integration_v4.core.integration_context",
-    "masyg_extractor.integration_qb_v5.domain.models",
-    "masyg_extractor.integration_v4.domain.models",
-    "masyg_extractor.integration_qb_v5.repository.firestore_repository",
-    "masyg_extractor.integration_v4.repository.firestore_repository",
-}
-
-COMPATIBILITY_FILES = {
-    "masyg_extractor/integration_qb_v5/core/integration_context.py",
-    "masyg_extractor/integration_v4/core/integration_context.py",
-    "masyg_extractor/integration_qb_v5/domain/models.py",
-    "masyg_extractor/integration_v4/domain/models.py",
-    "masyg_extractor/integration_qb_v5/repository/firestore_repository.py",
-    "masyg_extractor/integration_v4/repository/firestore_repository.py",
-}
+VERSIONED_TREES = (
+    ROOT / "masyg_extractor/integration_qb_v5",
+    ROOT / "masyg_extractor/integration_v4",
+)
 
 
 def _imports(path: Path):
     tree = ast.parse(path.read_text(), filename=str(path))
-    result = []
+    modules = []
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            result.append(node.module or "")
+        if isinstance(node, ast.ImportFrom) and node.module:
+            modules.append(node.module)
         elif isinstance(node, ast.Import):
-            result.extend(alias.name for alias in node.names)
-    return result
+            modules.extend(alias.name for alias in node.names)
+
+    return modules
 
 
 def test_canonical_shared_owner_files_exist():
-    assert (
-        ROOT
-        / "masyg_extractor/integrations/accounting/core/integration_context.py"
-    ).is_file()
-    assert (
-        ROOT / "masyg_extractor/integrations/accounting/core/models.py"
-    ).is_file()
-    assert (
-        ROOT
-        / "masyg_extractor/integrations/accounting/shared/firestore_repository.py"
-    ).is_file()
+    assert all(path.is_file() for path in CANONICAL_SHARED_FILES)
 
 
-def test_production_code_uses_canonical_context_models_and_repository():
+def test_versioned_accounting_trees_have_no_python_sources():
+    for path in VERSIONED_TREES:
+        assert not path.exists() or not any(path.rglob("*.py"))
+
+
+def test_canonical_providers_import_only_canonical_shared_owners():
+    provider_roots = (
+        ROOT / "masyg_extractor/integrations/accounting/quickbooks",
+        ROOT / "masyg_extractor/integrations/accounting/xero",
+    )
+    forbidden = (
+        "masyg_extractor.integration_qb_v5",
+        "masyg_extractor.integration_v4",
+    )
+
     offenders = []
 
-    for path in (ROOT / "masyg_extractor").rglob("*.py"):
-        relative = str(path.relative_to(ROOT))
-        if relative in COMPATIBILITY_FILES:
-            continue
-
-        for module in _imports(path):
-            if module in VERSIONED_OWNERS:
-                offenders.append(f"{relative}: {module}")
+    for provider_root in provider_roots:
+        for path in provider_root.rglob("*.py"):
+            for module in _imports(path):
+                if module.startswith(forbidden):
+                    offenders.append(
+                        f"{path.relative_to(ROOT)} imports {module}"
+                    )
 
     assert offenders == []
-
-
-def test_versioned_owner_files_are_compatibility_reexports():
-    expectations = {
-        "masyg_extractor/integration_qb_v5/core/integration_context.py":
-            CANONICAL_CONTEXT,
-        "masyg_extractor/integration_v4/core/integration_context.py":
-            CANONICAL_CONTEXT,
-        "masyg_extractor/integration_qb_v5/domain/models.py":
-            CANONICAL_MODELS,
-        "masyg_extractor/integration_v4/domain/models.py":
-            CANONICAL_MODELS,
-        "masyg_extractor/integration_qb_v5/repository/firestore_repository.py":
-            CANONICAL_REPOSITORY,
-        "masyg_extractor/integration_v4/repository/firestore_repository.py":
-            CANONICAL_REPOSITORY,
-    }
-
-    for relative, canonical_module in expectations.items():
-        imports = _imports(ROOT / relative)
-        assert canonical_module in imports, relative

@@ -34,15 +34,13 @@ def test_registry_points_to_current_mounted_provider_modules_without_importing_t
     quickbooks = get_accounting_provider("quickbooks")
     xero = get_accounting_provider("xero")
 
-    assert quickbooks.implementation == "integration_qb_v5"
-    assert xero.implementation == "integration_v4"
     assert (
         quickbooks.router_module
-        == "masyg_extractor.integration_qb_v5.routers.qb_router"
+        == "masyg_extractor.integrations.accounting.quickbooks.router"
     )
     assert (
         xero.router_module
-        == "masyg_extractor.integration_v4.routers.xero_router"
+        == "masyg_extractor.integrations.accounting.xero.router"
     )
 
 
@@ -64,9 +62,9 @@ def test_iter_accounting_routers_preserves_registry_order():
     xero_router = object()
 
     def fake_import(module_name: str):
-        if module_name.endswith("integration_qb_v5.routers.qb_router"):
+        if module_name.endswith("integrations.accounting.quickbooks.router"):
             return SimpleNamespace(router=quickbooks_router)
-        if module_name.endswith("integration_v4.routers.xero_router"):
+        if module_name.endswith("integrations.accounting.xero.router"):
             return SimpleNamespace(router=xero_router)
         raise AssertionError(module_name)
 
@@ -92,8 +90,6 @@ def test_application_route_composition_uses_canonical_accounting_registry():
 
     assert "quickbook_router" not in routes
     assert "xero_router" not in routes
-    assert "integration_qb_v5" not in routes
-    assert "integration_v4" not in routes
 
 
 def test_registry_has_no_eager_active_router_imports():
@@ -101,8 +97,14 @@ def test_registry_has_no_eager_active_router_imports():
         "masyg_extractor/integrations/accounting/registry.py"
     )
 
-    assert "from masyg_extractor.integration_qb_v5" not in registry
-    assert "from masyg_extractor.integration_v4" not in registry
+    assert (
+        "from masyg_extractor.integrations.accounting.quickbooks.router"
+        not in registry
+    )
+    assert (
+        "from masyg_extractor.integrations.accounting.xero.router"
+        not in registry
+    )
     assert "import_module(registration.router_module)" in registry
 
 

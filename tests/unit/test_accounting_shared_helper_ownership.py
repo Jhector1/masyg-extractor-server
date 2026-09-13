@@ -5,34 +5,34 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 SKU_IMPORTERS = [
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/customer_service.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/document_service.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/item_service.py",
-    "masyg_extractor/integration_qb_v5/routers/route_helper.py",
-    "masyg_extractor/integration_v4/intergrate/xero/services/item_service.py",
-    "masyg_extractor/integration_v4/routers/route_helper.py",
+    "masyg_extractor/integrations/accounting/quickbooks/services/customer_service.py",
+    "masyg_extractor/integrations/accounting/quickbooks/services/document_service.py",
+    "masyg_extractor/integrations/accounting/quickbooks/services/item_service.py",
+    "masyg_extractor/integrations/accounting/quickbooks/route_helper.py",
+    "masyg_extractor/integrations/accounting/xero/services/item_service.py",
+    "masyg_extractor/integrations/accounting/xero/route_helper.py",
 ]
 
 UUID_IMPORTERS = [
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/customer_service.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/document_service.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/item_service.py",
-    "masyg_extractor/integration_v4/intergrate/xero/services/customer_service.py",
-    "masyg_extractor/integration_v4/intergrate/xero/services/document_service.py",
-    "masyg_extractor/integration_v4/intergrate/xero/services/item_service.py",
+    "masyg_extractor/integrations/accounting/quickbooks/services/customer_service.py",
+    "masyg_extractor/integrations/accounting/quickbooks/services/document_service.py",
+    "masyg_extractor/integrations/accounting/quickbooks/services/item_service.py",
+    "masyg_extractor/integrations/accounting/xero/services/customer_service.py",
+    "masyg_extractor/integrations/accounting/xero/services/document_service.py",
+    "masyg_extractor/integrations/accounting/xero/services/item_service.py",
 ]
 
 UNUSED_CROSS_PROVIDER_IMPORTS = {
-    "masyg_extractor/integration_qb_v5/routers/qb_router.py":
-        "masyg_extractor.integrations.xero.xero_client",
-    "masyg_extractor/integration_v4/entity_helper.py":
-        "masyg_extractor.integrations.quickbooks.quickbooks_client",
-    "masyg_extractor/integration_v4/intergrate/xero/adapter.py":
-        "masyg_extractor.integrations.quickbooks.quickbooks_client",
-    "masyg_extractor/integration_v4/intergrate/xero/services/account_service.py":
-        "masyg_extractor.integrations.quickbooks.quickbooks_client",
-    "masyg_extractor/integration_v4/intergrate/xero/services/item_service.py":
-        "masyg_extractor.integrations.quickbooks.quickbooks_client",
+    "masyg_extractor/integrations/accounting/quickbooks/router.py":
+        "masyg_extractor.integrations.accounting.xero.client",
+    "masyg_extractor/integrations/accounting/xero/entity_helper.py":
+        "masyg_extractor.integrations.accounting.quickbooks.client",
+    "masyg_extractor/integrations/accounting/xero/adapter.py":
+        "masyg_extractor.integrations.accounting.quickbooks.client",
+    "masyg_extractor/integrations/accounting/xero/services/account_service.py":
+        "masyg_extractor.integrations.accounting.quickbooks.client",
+    "masyg_extractor/integrations/accounting/xero/services/item_service.py":
+        "masyg_extractor.integrations.accounting.quickbooks.client",
 }
 
 
@@ -73,15 +73,15 @@ def test_safe_uuid_key_has_shared_owner():
         ) in imports, relative
 
 
-def test_legacy_provider_modules_reexport_shared_helpers():
-    qb_utils = _imports(ROOT / "masyg_extractor/integration_qb_v5/utils.py")
+def test_canonical_provider_modules_use_shared_helpers():
+    qb_utils = _imports(ROOT / "masyg_extractor/integrations/accounting/quickbooks/utils.py")
     assert (
         "masyg_extractor.integrations.accounting.shared.identifiers",
         ("extract_uuid", "safe_uuid_key"),
     ) in qb_utils
 
     xero_items = _imports(
-        ROOT / "masyg_extractor/integrations/xero/services/item_services.py"
+        ROOT / "masyg_extractor/integrations/accounting/xero/services/item_service.py"
     )
     assert (
         "masyg_extractor.integrations.accounting.shared.sku",

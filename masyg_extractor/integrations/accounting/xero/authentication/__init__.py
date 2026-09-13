@@ -1,0 +1,1 @@
+"""Canonical Xero authentication routes."""

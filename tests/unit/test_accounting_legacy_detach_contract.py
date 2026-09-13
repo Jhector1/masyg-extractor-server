@@ -1,86 +1,55 @@
+import ast
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
-ACTIVE_RUNTIME_FILES = [
-    "masyg_extractor/integration_qb_v5/routers/qb_router.py",
-    "masyg_extractor/integration_qb_v5/routers/route_helper.py",
-    "masyg_extractor/integration_qb_v5/entity_helper.py",
-    "masyg_extractor/integration_qb_v5/intergrate/baseAdapter.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/adapter.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/account_service.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/customer_service.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/document_service.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/invoice_service.py",
-    "masyg_extractor/integration_qb_v5/intergrate/quickbooks/services/item_service.py",
-    "masyg_extractor/integration_qb_v5/repository/firestore_repository.py",
-    "masyg_extractor/integration_qb_v5/core/integration_context.py",
-    "masyg_extractor/integration_qb_v5/domain/models.py",
-    "masyg_extractor/integration_qb_v5/utils.py",
-    "masyg_extractor/integration_v4/routers/xero_router.py",
-    "masyg_extractor/integration_v4/routers/route_helper.py",
-    "masyg_extractor/integration_v4/entity_helper.py",
-    "masyg_extractor/integration_v4/intergrate/baseAdapter.py",
-    "masyg_extractor/integration_v4/intergrate/xero/adapter.py",
-    "masyg_extractor/integration_v4/intergrate/xero/services/account_service.py",
-    "masyg_extractor/integration_v4/intergrate/xero/services/customer_service.py",
-    "masyg_extractor/integration_v4/intergrate/xero/services/document_service.py",
-    "masyg_extractor/integration_v4/intergrate/xero/services/invoice_service.py",
-    "masyg_extractor/integration_v4/intergrate/xero/services/item_service.py",
-    "masyg_extractor/integration_v4/repository/firestore_repository.py",
-    "masyg_extractor/integration_v4/core/integration_context.py",
-    "masyg_extractor/integration_v4/domain/models.py",
-    "masyg_extractor/integration_v4/utils.py",
-]
+VERSIONED_TREES = (
+    ROOT / "masyg_extractor/integration_qb_v5",
+    ROOT / "masyg_extractor/integration_v4",
+)
+
+CANONICAL_PROVIDER_ROOTS = (
+    ROOT / "masyg_extractor/integrations/accounting/quickbooks",
+    ROOT / "masyg_extractor/integrations/accounting/xero",
+)
 
 
-def test_canonical_accounting_context_exists():
-    source = (
-        ROOT
-        / "masyg_extractor/integrations/accounting/core/integration_context.py"
-    ).read_text()
+def _imports(path: Path):
+    tree = ast.parse(path.read_text(), filename=str(path))
+    modules = []
 
-    assert "class IntegrationContext" in source
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            modules.append(node.module)
+        elif isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
 
-
-def test_active_accounting_runtime_no_longer_imports_v2_or_v3():
-    for relative in ACTIVE_RUNTIME_FILES:
-        source = (ROOT / relative).read_text()
-
-        assert "masyg_extractor.integration_v2" not in source, relative
-        assert "masyg_extractor.integration_v3" not in source, relative
+    return modules
 
 
-def test_legacy_integration_v3_tree_is_removed():
-    assert not (ROOT / "masyg_extractor/integration_v3").exists()
+def test_versioned_provider_trees_have_no_python_sources():
+    for path in VERSIONED_TREES:
+        assert not path.exists() or not any(path.rglob("*.py"))
 
 
-def test_xero_uses_its_current_adapter_and_repository_owners():
-    entity_helper = (
-        ROOT / "masyg_extractor/integration_v4/entity_helper.py"
-    ).read_text()
-    adapter = (
-        ROOT / "masyg_extractor/integration_v4/intergrate/xero/adapter.py"
-    ).read_text()
-    account_service = (
-        ROOT
-        / "masyg_extractor/integration_v4/intergrate/xero/services/account_service.py"
-    ).read_text()
+def test_canonical_provider_roots_exist():
+    assert all(path.is_dir() for path in CANONICAL_PROVIDER_ROOTS)
 
-    assert (
-        "from masyg_extractor.integration_v4.intergrate.baseAdapter "
-        "import IntegrationClientAdapter"
-    ) in entity_helper
-    assert (
-        "from masyg_extractor.integrations.accounting.shared.firestore_repository "
-        "import QuickBooksFirestoreService"
-    ) in entity_helper
-    assert (
-        "from masyg_extractor.integration_v4.intergrate.baseAdapter "
-        "import IntegrationClientAdapter"
-    ) in adapter
-    assert (
-        "from masyg_extractor.integrations.accounting.shared.firestore_repository "
-        "import QuickBooksFirestoreService"
-    ) in account_service
+
+def test_canonical_provider_sources_have_no_versioned_imports():
+    forbidden = (
+        "masyg_extractor.integration_qb_v5",
+        "masyg_extractor.integration_v4",
+    )
+    offenders = []
+
+    for provider_root in CANONICAL_PROVIDER_ROOTS:
+        for path in provider_root.rglob("*.py"):
+            for module in _imports(path):
+                if module.startswith(forbidden):
+                    offenders.append(
+                        f"{path.relative_to(ROOT)} imports {module}"
+                    )
+
+    assert offenders == []

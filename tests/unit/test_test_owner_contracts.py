@@ -40,17 +40,20 @@ def test_user_route_test_targets_the_current_fastapi_app_and_httpx_transport():
     assert "httpx.AsyncClient" in sync_client
 
 
-def test_live_quickbooks_test_contract_targets_v5_owner():
-    contract = _source("tests/unit/test_active_quickbooks_v5_contracts.py")
+def test_live_quickbooks_test_contract_targets_canonical_owner():
+    contract = _source("tests/unit/test_active_quickbooks_contracts.py")
 
-    assert "integration_qb_v5" in contract
-    assert "test_qb_transactions_services.py" in contract
+    assert "integrations/accounting/quickbooks" in contract
+    assert "test_canonical_invoice_service_keeps_async_contract" in contract
 
 
-def test_accounting_registry_keeps_quickbooks_v5_as_live_owner():
+def test_accounting_registry_uses_canonical_quickbooks_router():
     registry = _source(
         "masyg_extractor/integrations/accounting/registry.py"
     )
 
     assert 'provider="quickbooks"' in registry
-    assert 'implementation="integration_qb_v5"' in registry
+    assert (
+        'router_module="masyg_extractor.integrations.accounting.'
+        'quickbooks.router"'
+    ) in registry

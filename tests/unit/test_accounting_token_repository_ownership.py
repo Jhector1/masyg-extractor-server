@@ -55,7 +55,7 @@ def test_shared_token_repository_owns_generic_read():
 
 def test_xero_client_uses_generic_token_owner():
     source = (
-        ROOT / "masyg_extractor/integrations/xero/xero_client.py"
+        ROOT / "masyg_extractor/integrations/accounting/xero/client.py"
     ).read_text()
 
     assert (
@@ -63,23 +63,17 @@ def test_xero_client_uses_generic_token_owner():
         "import get_integration_token"
     ) in source
     assert "get_integration_token, user_id, \"xero\"" in source
-    assert (
-        "masyg_extractor.integrations.quickbooks.repository.firestore_repository"
-        not in source
-    )
     assert "get_quickbooks_token" not in source
 
 
-def test_quickbooks_legacy_token_reader_is_compatibility_wrapper():
+def test_quickbooks_client_uses_generic_token_owner():
     source = (
-        ROOT
-        / "masyg_extractor/integrations/quickbooks/repository/firestore_repository.py"
+        ROOT / "masyg_extractor/integrations/accounting/quickbooks/client.py"
     ).read_text()
 
     assert (
         "from masyg_extractor.integrations.accounting.shared.token_repository "
-        "import get_integration_token"
+        "import get_integration_token as get_quickbooks_token"
     ) in source
-    assert "def get_quickbooks_token(" in source
-    assert "get_integration_token(" in source
-    assert "db=firestore_db" in source
+    assert "get_quickbooks_token" in source
+    assert '"quickbooks"' in source

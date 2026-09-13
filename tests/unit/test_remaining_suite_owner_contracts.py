@@ -8,16 +8,16 @@ def _source(relative_path: str) -> str:
     return (ROOT / relative_path).read_text()
 
 
-def test_firestore_record_test_targets_current_quickbooks_repository():
-    source = _source("tests/integration/firestore_record_test.py")
+def test_obsolete_legacy_quickbooks_integration_tests_are_retired():
+    retired = (
+        "tests/integration/firestore_record_test.py",
+        "tests/integration/quickbook_invoice_test.py",
+        "tests/integration/batch_invoice_effiency.py",
+        "tests/integration/testbulk_invoices.py",
+    )
 
-    assert (
-        "masyg_extractor.integrations.quickbooks.repository."
-        "firestore_repository"
-    ) in source
-    assert (
-        "masyg_extractor.integrations.repository.firestore_repository"
-    ) not in source
+    for relative_path in retired:
+        assert not (ROOT / relative_path).exists()
 
 
 def test_obsolete_multiple_invoice_service_test_is_retired():

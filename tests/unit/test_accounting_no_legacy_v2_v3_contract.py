@@ -56,9 +56,9 @@ def test_production_and_tests_do_not_import_legacy_v2_or_v3():
                         )
 
 
-def test_dead_xero_receipt_service_is_removed():
-    receipt_service = (
-        ROOT
-        / "masyg_extractor/integration_v4/intergrate/xero/services/receipt_service.py"
-    )
-    assert not receipt_service.exists()
+def test_versioned_accounting_provider_trees_have_no_python_sources():
+    for path in (
+        ROOT / "masyg_extractor/integration_qb_v5",
+        ROOT / "masyg_extractor/integration_v4",
+    ):
+        assert not path.exists() or not any(path.rglob("*.py"))

@@ -11,7 +11,6 @@ AccountingProviderId = Literal["quickbooks", "xero"]
 class AccountingProviderRegistration:
     provider: AccountingProviderId
     route_prefix: str
-    implementation: str
     router_module: str
 
 
@@ -19,14 +18,12 @@ ACCOUNTING_PROVIDER_REGISTRY: tuple[AccountingProviderRegistration, ...] = (
     AccountingProviderRegistration(
         provider="quickbooks",
         route_prefix="/integrations/quickbooks",
-        implementation="integration_qb_v5",
-        router_module="masyg_extractor.integration_qb_v5.routers.qb_router",
+        router_module="masyg_extractor.integrations.accounting.quickbooks.router",
     ),
     AccountingProviderRegistration(
         provider="xero",
         route_prefix="/integrations/xero",
-        implementation="integration_v4",
-        router_module="masyg_extractor.integration_v4.routers.xero_router",
+        router_module="masyg_extractor.integrations.accounting.xero.router",
     ),
 )
 

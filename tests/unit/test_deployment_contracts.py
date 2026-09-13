@@ -62,7 +62,7 @@ def test_payment_mutations_use_cookie_auth_not_legacy_session_auth():
 
 
 def test_registered_quickbooks_test_endpoint_is_hidden_in_production_and_errors_are_generic():
-    qb = (ROOT / "masyg_extractor/integration_qb_v5/routers/qb_router.py").read_text()
+    qb = (ROOT / "masyg_extractor/integrations/accounting/quickbooks/router.py").read_text()
     assert 'if os.getenv("FAST_API_ENV", "development").lower() == "production":' in qb
     assert 'raise HTTPException(status_code=404, detail="Not found")' in qb
     assert 'detail=str(e)' not in qb
@@ -70,7 +70,7 @@ def test_registered_quickbooks_test_endpoint_is_hidden_in_production_and_errors_
 
 
 def test_quickbooks_accounts_call_is_offloaded_and_provider_details_are_not_reflected():
-    qb = (ROOT / "masyg_extractor/integration_qb_v5/routers/qb_router.py").read_text()
+    qb = (ROOT / "masyg_extractor/integrations/accounting/quickbooks/router.py").read_text()
     assert "await asyncio.to_thread(" in qb
     assert "requests.get," in qb
     assert 'detail="QuickBooks query failed"' in qb
