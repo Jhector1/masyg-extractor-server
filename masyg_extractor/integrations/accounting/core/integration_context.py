@@ -4,11 +4,9 @@
 from dataclasses import dataclass
 from typing import Dict
 
-from fastapi import FastAPI, Request, HTTPException, status, APIRouter, Depends
-
+from fastapi import Request
 from masyg_extractor.services.log_manager import LogManager
 from masyg_extractor.services.progress_log import IntegrationsProgressLog
-
 
 @dataclass
 class IntegrationContext:
@@ -18,6 +16,4 @@ class IntegrationContext:
     progress_logger: IntegrationsProgressLog
     progress: Dict[str, float]
     doct_type: str
-    extra_auth_params: str
     log_manager: LogManager
-    integration: str

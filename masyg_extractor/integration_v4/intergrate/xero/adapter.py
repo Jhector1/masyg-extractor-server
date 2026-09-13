@@ -10,8 +10,8 @@ from typing import Optional, Dict, Any
 import httpx
 from fastapi import HTTPException, status
 
-from masyg_extractor.integration_v2.core.integration_context import IntegrationContext
-from masyg_extractor.integration_v2.intergrate.baseAdapter import IntegrationClientAdapter
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
+from masyg_extractor.integration_v4.intergrate.baseAdapter import IntegrationClientAdapter
 from masyg_extractor.integrations.quickbooks.quickbooks_client import QUICKBOOKS_URL
 
 from masyg_extractor.services.my_log import logger

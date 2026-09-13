@@ -4,7 +4,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 
-from masyg_extractor.integration_v2.core.integration_context import IntegrationContext
+from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
 
 
 class IntegrationClientAdapter(ABC):
