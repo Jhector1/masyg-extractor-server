@@ -136,21 +136,29 @@ fi
 echo
 echo "=== ENVIRONMENT CHECK ==="
 
-ENV_FILE_PATH="${ENV_FILE:-.env}"
+if [[ -n "${ENV_FILE:-}" ]]; then
+  ENV_FILE_PATH="$ENV_FILE"
 
-if [[ ! -f "$ENV_FILE_PATH" ]]; then
-  if [[ -f .env ]]; then
-    ENV_FILE_PATH=".env"
-  elif [[ -f masyg_extractor/.env ]]; then
-    ENV_FILE_PATH="masyg_extractor/.env"
-  else
-    echo "ERROR: Production environment file was not found."
-    echo "Expected .env or masyg_extractor/.env"
+  if [[ ! -f "$ENV_FILE_PATH" ]]; then
+    echo "ERROR: Explicit ENV_FILE does not exist: $ENV_FILE_PATH"
     exit 1
   fi
+elif [[ -f masyg_extractor/.env ]]; then
+  ENV_FILE_PATH="masyg_extractor/.env"
+elif [[ -f .env ]]; then
+  ENV_FILE_PATH=".env"
+else
+  echo "ERROR: Production environment file was not found."
+  echo "Expected masyg_extractor/.env or .env"
+  exit 1
 fi
 
+# Make Docker Compose consume the exact environment file that passed the
+# deployment preflight above. docker-compose.yml reads ${ENV_FILE}.
+export ENV_FILE="$ENV_FILE_PATH"
+
 echo "Environment file found: $ENV_FILE_PATH"
+echo "Docker Compose env file: $ENV_FILE"
 
 echo
 echo "=== VALIDATE DOCKER COMPOSE ==="

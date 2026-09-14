@@ -175,3 +175,20 @@ def test_auth_runtime_smoke_script_covers_rotation_replay_and_logout():
     assert "old refresh replay rejected" in smoke
     assert '"/api/user/logout"' in smoke
     assert "refresh rejected after logout" in smoke
+
+
+def test_deploy_uses_one_canonical_environment_file_for_preflight_and_compose():
+    deploy = (ROOT / "deploy.sh").read_text()
+    compose = (ROOT / "docker-compose.yml").read_text()
+
+    assert '${ENV_FILE:-masyg_extractor/.env}' in compose
+    assert 'ENV_FILE_PATH="masyg_extractor/.env"' in deploy
+    assert 'export ENV_FILE="$ENV_FILE_PATH"' in deploy
+    assert 'Docker Compose env file: $ENV_FILE' in deploy
+
+
+def test_explicit_missing_deploy_env_file_fails_closed():
+    deploy = (ROOT / "deploy.sh").read_text()
+
+    assert 'if [[ -n "${ENV_FILE:-}" ]]; then' in deploy
+    assert 'ERROR: Explicit ENV_FILE does not exist:' in deploy
