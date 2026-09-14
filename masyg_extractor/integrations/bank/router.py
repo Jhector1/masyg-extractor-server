@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from masyg_extractor.config.jwt_config import get_current_user_from_cookie
 from masyg_extractor.integrations.bank.plaid_client import PlaidApiError, PlaidConfigurationError
 from masyg_extractor.integrations.bank.repository import BankRepositoryConfigurationError
+from masyg_extractor.integrations.bank.reconciliation import BankReconciliationService
 from masyg_extractor.integrations.bank.service import BankService
 from masyg_extractor.integrations.bank.webhook_repository import (
     BankWebhookRepository,
@@ -31,6 +32,21 @@ class ExchangePublicTokenRequest(BaseModel):
     institution_name: str | None = None
 
 
+class BankTransactionIdentityRequest(BaseModel):
+    item_id: str = Field(min_length=1)
+
+
+class MatchBankTransactionRequest(BaseModel):
+    item_id: str = Field(min_length=1)
+    group_id: str = Field(min_length=1)
+    file_id: str = Field(min_length=1)
+
+
+class UpdateBankTransactionStatusRequest(BaseModel):
+    item_id: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+
+
 def _user_id(current_user: dict[str, Any]) -> str:
     user_id = str(current_user.get("userId") or "").strip()
     if not user_id:
@@ -42,11 +58,23 @@ def _service_for(current_user: dict[str, Any]) -> BankService:
     return BankService(_user_id(current_user))
 
 
+def _reconciliation_for(
+    current_user: dict[str, Any],
+) -> BankReconciliationService:
+    return BankReconciliationService(_user_id(current_user))
+
+
 def _raise_bank_error(exc: Exception) -> None:
     if isinstance(exc, KeyError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc.args[0] if exc.args else "Bank connection not found."),
+        ) from exc
+
+    if isinstance(exc, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
         ) from exc
 
     if isinstance(exc, (PlaidConfigurationError, BankRepositoryConfigurationError)):
@@ -183,6 +211,67 @@ async def get_transactions(
 ):
     try:
         return await _service_for(current_user).transactions(limit=limit)
+    except Exception as exc:
+        _raise_bank_error(exc)
+
+
+@router.get("/reconciliation")
+async def get_reconciliation(
+    limit: int = Query(500, ge=1, le=500),
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
+    try:
+        return await _reconciliation_for(current_user).reconciliation(
+            limit=limit,
+        )
+    except Exception as exc:
+        _raise_bank_error(exc)
+
+
+@router.post("/transactions/{transaction_id}/match")
+async def match_bank_transaction(
+    transaction_id: str,
+    payload: MatchBankTransactionRequest,
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
+    try:
+        return await _reconciliation_for(current_user).match_transaction(
+            item_id=payload.item_id,
+            transaction_id=transaction_id,
+            group_id=payload.group_id,
+            file_id=payload.file_id,
+        )
+    except Exception as exc:
+        _raise_bank_error(exc)
+
+
+@router.post("/transactions/{transaction_id}/unmatch")
+async def unmatch_bank_transaction(
+    transaction_id: str,
+    payload: BankTransactionIdentityRequest,
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
+    try:
+        return await _reconciliation_for(current_user).unmatch_transaction(
+            item_id=payload.item_id,
+            transaction_id=transaction_id,
+        )
+    except Exception as exc:
+        _raise_bank_error(exc)
+
+
+@router.post("/transactions/{transaction_id}/status")
+async def update_bank_transaction_status(
+    transaction_id: str,
+    payload: UpdateBankTransactionStatusRequest,
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
+    try:
+        return await _reconciliation_for(current_user).set_status(
+            item_id=payload.item_id,
+            transaction_id=transaction_id,
+            reconciliation_status=payload.status,
+        )
     except Exception as exc:
         _raise_bank_error(exc)
 

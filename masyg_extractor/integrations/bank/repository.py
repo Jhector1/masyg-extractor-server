@@ -35,6 +35,18 @@ def _transaction_doc_id(transaction_id: str) -> str:
     return hashlib.sha256(transaction_id.encode("utf-8")).hexdigest()
 
 
+def _reconciliation_claim_doc_id(
+    group_id: str,
+    file_id: str,
+) -> str:
+    raw = (
+        group_id.encode("utf-8")
+        + b"\0"
+        + file_id.encode("utf-8")
+    )
+    return hashlib.sha256(raw).hexdigest()
+
+
 class BankIntegrationRepository:
     def __init__(self, user_id: str, *, db: Any = None, fernet: Fernet | None = None) -> None:
         if not user_id:
@@ -153,14 +165,75 @@ class BankIntegrationRepository:
         )
 
     def delete_transaction(self, item_id: str, transaction_id: str) -> None:
-        if not transaction_id:
+        if not item_id or not transaction_id:
             return
-        (
+
+        transaction_ref = (
             self.items_ref.document(item_id)
             .collection("transactions")
             .document(_transaction_doc_id(transaction_id))
-            .delete()
         )
+
+        claims_ref = self.bank_ref.collection("reconciliationClaims")
+        transaction = self.db.transaction()
+
+        @firestore.transactional
+        def _delete(txn):
+            snapshot = transaction_ref.get(transaction=txn)
+            if not snapshot.exists:
+                return
+
+            row = snapshot.to_dict() or {}
+            reconciliation = row.get("reconciliation") or {}
+
+            group_id = (
+                str(reconciliation.get("group_id") or "").strip()
+                if isinstance(reconciliation, dict)
+                and reconciliation.get("status") == "matched"
+                else ""
+            )
+            file_id = (
+                str(reconciliation.get("file_id") or "").strip()
+                if isinstance(reconciliation, dict)
+                and reconciliation.get("status") == "matched"
+                else ""
+            )
+
+            claim_ref = (
+                claims_ref.document(
+                    _reconciliation_claim_doc_id(
+                        group_id,
+                        file_id,
+                    )
+                )
+                if group_id and file_id
+                else None
+            )
+
+            claim_snapshot = (
+                claim_ref.get(transaction=txn)
+                if claim_ref is not None
+                else None
+            )
+
+            # Complete every read before beginning transaction writes.
+            if (
+                claim_ref is not None
+                and claim_snapshot is not None
+                and claim_snapshot.exists
+            ):
+                owner = claim_snapshot.to_dict() or {}
+
+                if (
+                    str(owner.get("itemId") or "") == item_id
+                    and str(owner.get("transactionId") or "")
+                    == transaction_id
+                ):
+                    txn.delete(claim_ref)
+
+            txn.delete(transaction_ref)
+
+        _delete(transaction)
 
     def list_transactions(self, *, limit: int = 100) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -179,11 +252,223 @@ class BankIntegrationRepository:
         )
         return rows[: max(1, min(limit, 500))]
 
+    def get_transaction(
+        self,
+        item_id: str,
+        transaction_id: str,
+    ) -> dict[str, Any] | None:
+        if not item_id or not transaction_id:
+            return None
+
+        snapshot = (
+            self.items_ref.document(item_id)
+            .collection("transactions")
+            .document(_transaction_doc_id(transaction_id))
+            .get()
+        )
+
+        if not snapshot.exists:
+            return None
+
+        row = snapshot.to_dict() or {}
+        row.setdefault("item_id", item_id)
+        return row
+
+    def update_transaction_reconciliation(
+        self,
+        item_id: str,
+        transaction_id: str,
+        reconciliation: dict[str, Any],
+    ) -> None:
+        if not item_id or not transaction_id:
+            raise ValueError("item_id and transaction_id are required")
+
+        transaction_ref = (
+            self.items_ref.document(item_id)
+            .collection("transactions")
+            .document(_transaction_doc_id(transaction_id))
+        )
+
+        claims_ref = self.bank_ref.collection("reconciliationClaims")
+        transaction = self.db.transaction()
+
+        @firestore.transactional
+        def _update(txn):
+            snapshot = transaction_ref.get(transaction=txn)
+            if not snapshot.exists:
+                raise KeyError("Bank transaction not found.")
+
+            current = snapshot.to_dict() or {}
+            previous = current.get("reconciliation") or {}
+
+            old_group_id = (
+                str(previous.get("group_id") or "").strip()
+                if isinstance(previous, dict)
+                and previous.get("status") == "matched"
+                else ""
+            )
+            old_file_id = (
+                str(previous.get("file_id") or "").strip()
+                if isinstance(previous, dict)
+                and previous.get("status") == "matched"
+                else ""
+            )
+
+            new_status = str(
+                reconciliation.get("status") or ""
+            ).strip()
+
+            new_group_id = (
+                str(reconciliation.get("group_id") or "").strip()
+                if new_status == "matched"
+                else ""
+            )
+            new_file_id = (
+                str(reconciliation.get("file_id") or "").strip()
+                if new_status == "matched"
+                else ""
+            )
+
+            if new_status == "matched" and (
+                not new_group_id or not new_file_id
+            ):
+                raise ValueError(
+                    "Matched reconciliation requires a document identity."
+                )
+
+            old_claim_ref = (
+                claims_ref.document(
+                    _reconciliation_claim_doc_id(old_group_id, old_file_id)
+                )
+                if old_group_id and old_file_id
+                else None
+            )
+
+            new_claim_ref = (
+                claims_ref.document(
+                    _reconciliation_claim_doc_id(new_group_id, new_file_id)
+                )
+                if new_group_id and new_file_id
+                else None
+            )
+
+            old_claim_snapshot = (
+                old_claim_ref.get(transaction=txn)
+                if old_claim_ref is not None
+                else None
+            )
+
+            if (
+                new_claim_ref is not None
+                and old_claim_ref is not None
+                and new_claim_ref.path == old_claim_ref.path
+            ):
+                new_claim_snapshot = old_claim_snapshot
+            elif new_claim_ref is not None:
+                new_claim_snapshot = new_claim_ref.get(
+                    transaction=txn
+                )
+            else:
+                new_claim_snapshot = None
+
+            if (
+                new_claim_snapshot is not None
+                and new_claim_snapshot.exists
+            ):
+                owner = new_claim_snapshot.to_dict() or {}
+
+                same_owner = (
+                    str(owner.get("itemId") or "") == item_id
+                    and str(owner.get("transactionId") or "")
+                    == transaction_id
+                )
+
+                if not same_owner:
+                    raise ValueError(
+                        "Document is already matched to another "
+                        "bank transaction."
+                    )
+
+            # All reads happen before writes so the Firestore transaction
+            # remains valid under concurrent match attempts.
+
+            if (
+                old_claim_ref is not None
+                and (
+                    new_claim_ref is None
+                    or new_claim_ref.path != old_claim_ref.path
+                )
+                and old_claim_snapshot is not None
+                and old_claim_snapshot.exists
+            ):
+                owner = old_claim_snapshot.to_dict() or {}
+
+                if (
+                    str(owner.get("itemId") or "") == item_id
+                    and str(owner.get("transactionId") or "")
+                    == transaction_id
+                ):
+                    txn.delete(old_claim_ref)
+
+            if new_claim_ref is not None:
+                txn.set(
+                    new_claim_ref,
+                    {
+                        "groupId": new_group_id,
+                        "fileId": new_file_id,
+                        "itemId": item_id,
+                        "transactionId": transaction_id,
+                        "updatedAt": _utc_now_iso(),
+                    },
+                )
+
+            # Replace the complete local reconciliation map. Provider
+            # transaction fields remain untouched.
+            txn.update(
+                transaction_ref,
+                {
+                    "reconciliation": reconciliation,
+                },
+            )
+
+        _update(transaction)
+
     def delete_item(self, item_id: str) -> None:
         item_ref = self.items_ref.document(item_id)
+
         for snapshot in item_ref.collection("transactions").stream():
-            snapshot.reference.delete()
+            row = snapshot.to_dict() or {}
+            transaction_id = str(
+                row.get("transaction_id") or ""
+            ).strip()
+
+            if transaction_id:
+                self.delete_transaction(
+                    item_id,
+                    transaction_id,
+                )
+            else:
+                # A legacy/corrupt row without its Plaid transaction id
+                # cannot own a canonical reconciliation claim.
+                snapshot.reference.delete()
+
+        # Best-effort cleanup for orphaned claims that may predate
+        # claim-aware transaction deletion.
+        for claim_snapshot in (
+            self.bank_ref
+            .collection("reconciliationClaims")
+            .stream()
+        ):
+            if not claim_snapshot.exists:
+                continue
+
+            claim = claim_snapshot.to_dict() or {}
+
+            if str(claim.get("itemId") or "") == item_id:
+                claim_snapshot.reference.delete()
+
         item_ref.delete()
+
         self.webhook_repository.unregister_item_owner(
             item_id,
             self.user_id,
