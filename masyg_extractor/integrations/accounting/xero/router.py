@@ -22,6 +22,38 @@ from masyg_extractor.services.progress_log import IntegrationsProgressLog, get_i
 router = APIRouter(prefix="/integrations/xero")
 router.include_router(auth_router, prefix="", tags=["Xero Auth"])
 
+
+def _xero_provider_error_response(response):
+    if not isinstance(response, dict) or "error" not in response:
+        return None
+
+    try:
+        provider_status = int(response.get("status_code") or 502)
+    except (TypeError, ValueError):
+        provider_status = 502
+
+    error_message = str(
+        response.get("error") or "Xero request failed."
+    ).strip()
+
+    if provider_status in {401, 403}:
+        return JSONResponse(
+            {
+                "error": error_message,
+                "code": "XERO_AUTH_EXPIRED",
+            },
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    safe_status = provider_status if 400 <= provider_status <= 599 else 502
+    return JSONResponse(
+        {
+            "error": error_message,
+            "code": "XERO_API_ERROR",
+        },
+        status_code=safe_status,
+    )
+
 #
 # def normalize_payload(data, record_key: str) -> list:
 #     """
@@ -345,6 +377,9 @@ async def get_items(request: Request, current_user: dict = Depends(get_current_u
 
     try:
         response = await xero_request( "Items", user_id=user_Id,method="GET")
+        error_response = _xero_provider_error_response(response)
+        if error_response is not None:
+            return error_response
         # Assuming the response contains an "Items" key with the list of items
         items = response.get("Items", [])
         filtered_items = [
@@ -373,6 +408,9 @@ async def get_customers(request: Request, current_user: dict = Depends(get_curre
     params = {"where": 'IsCustomer=true'}
     try:
         response = await xero_request("Contacts", user_id=user_Id,method="GET", params=params)
+        error_response = _xero_provider_error_response(response)
+        if error_response is not None:
+            return error_response
         customers = response.get("Contacts", [])
         filtered_customers = [
             {"Name": customer.get("Name"), "Id": customer.get("ContactID")}
@@ -397,6 +435,9 @@ async def get_vendors(request: Request, current_user: dict = Depends(get_current
     params = {"where": 'IsSupplier=true'}
     try:
         response = await xero_request(  "Contacts",user_Id, method="GET", params=params)
+        error_response = _xero_provider_error_response(response)
+        if error_response is not None:
+            return error_response
         suppliers = response.get("Contacts", [])
         filtered_suppliers = [
             {"Name": customer.get("Name"), "Id": customer.get("ContactID")}
@@ -432,6 +473,9 @@ async def get_accounts(request: Request,current_user: dict = Depends(get_current
     try:
 
         response = await xero_request( "Accounts", user_id=user_Id, method="GET", params=params)
+        error_response = _xero_provider_error_response(response)
+        if error_response is not None:
+            return error_response
         accounts = response.get("Accounts", [])
         return JSONResponse(content=accounts, status_code=status.HTTP_200_OK)
     except Exception as err:

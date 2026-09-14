@@ -11,6 +11,83 @@ from fastapi import Request, HTTPException, status
 XERO_BASE_URL = "https://api.xero.com/api.xro/2.0"
 
 
+def _safe_xero_text(value: Any, fallback: str = "", limit: int = 500) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    if len(text) > limit:
+        return text[: limit - 1].rstrip() + "…"
+    return text
+
+
+def _xero_validation_messages(element: Any) -> list[str]:
+    if not isinstance(element, dict):
+        return []
+
+    messages: list[str] = []
+    validation_errors = element.get("ValidationErrors")
+    if isinstance(validation_errors, list):
+        for entry in validation_errors:
+            if not isinstance(entry, dict):
+                continue
+            message = _safe_xero_text(entry.get("Message"))
+            if message and message not in messages:
+                messages.append(message)
+
+    element_message = _safe_xero_text(element.get("Message"))
+    if element_message and element_message not in messages:
+        messages.append(element_message)
+
+    return messages
+
+
+def _normalize_xero_http_error(response: httpx.Response) -> Dict[str, Any]:
+    status_code = int(response.status_code)
+    try:
+        body = response.json()
+    except Exception:
+        body = {}
+
+    if not isinstance(body, dict):
+        body = {}
+
+    if status_code in {401, 403}:
+        default_message = "Xero authorization expired. Reconnect Xero and try again."
+    elif status_code == 429:
+        default_message = "Xero rate limit reached. Please try again shortly."
+    elif 500 <= status_code:
+        default_message = "Xero is temporarily unavailable. Please try again."
+    else:
+        default_message = "Xero rejected the request."
+
+    top_message = _safe_xero_text(body.get("Message"), default_message)
+    document_errors: list[dict[str, Any]] = []
+
+    elements = body.get("Elements")
+    if isinstance(elements, list):
+        for index, element in enumerate(elements):
+            messages = _xero_validation_messages(element)
+            if not messages:
+                continue
+            document_errors.append(
+                {
+                    "index": index,
+                    "message": _safe_xero_text("; ".join(messages), default_message),
+                }
+            )
+
+    top_validation = _xero_validation_messages(body)
+    if top_validation:
+        top_message = _safe_xero_text("; ".join(top_validation), top_message)
+
+    return {
+        "error": top_message,
+        "status_code": status_code,
+        "document_errors": document_errors,
+    }
+
+
+
 async def xero_request(
         endpoint: str,
         user_id: str,
@@ -63,8 +140,21 @@ async def xero_request(
             logger.info(f"Xero API Response: {response.status_code}")
 
             return response_json
-        except httpx.RequestError as e:
-            error_message = f"Xero API Request Failed: {str(e)}"
-
-            logger.error(error_message)
-            return {"error": error_message}
+        except httpx.HTTPStatusError as exc:
+            normalized = _normalize_xero_http_error(exc.response)
+            logger.warning(
+                "Xero API rejected request status=%s error=%s",
+                normalized["status_code"],
+                normalized["error"],
+            )
+            return normalized
+        except httpx.RequestError as exc:
+            logger.warning(
+                "Xero API transport failure error_type=%s",
+                type(exc).__name__,
+            )
+            return {
+                "error": "Xero service unavailable. Please try again.",
+                "status_code": 502,
+                "document_errors": [],
+            }

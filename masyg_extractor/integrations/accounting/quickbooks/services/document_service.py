@@ -17,6 +17,7 @@ from masyg_extractor.integrations.accounting.quickbooks.services.customer_servic
 from masyg_extractor.integrations.accounting.quickbooks.services.item_service import ItemService
 from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
+from masyg_extractor.integrations.accounting.shared.operation_progress import AccountingOperationProgress
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.accounting.shared.sku import generate_sku
 from masyg_extractor.services.log_manager import LogManager
@@ -34,6 +35,49 @@ def _is_retryable(payload: Dict[str, Any]) -> bool:
     except Exception:
         s = str(payload).lower()
     return any(k in s for k in ["timeout", "network", "transport", "429", "rate", "limit"])
+
+
+def _safe_provider_text(value: Any, *, limit: int = 320) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit]
+
+
+def _quickbooks_fault_message(payload: Dict[str, Any]) -> str:
+    """Extract safe QuickBooks validation text from a batch Fault."""
+    fault = payload.get("Fault") if isinstance(payload, dict) else None
+    errors = fault.get("Error") if isinstance(fault, dict) else None
+    first = errors[0] if isinstance(errors, list) and errors else None
+
+    if not isinstance(first, dict):
+        return "QuickBooks rejected this document."
+
+    message = _safe_provider_text(first.get("Message"))
+    detail = _safe_provider_text(first.get("Detail"))
+    code = _safe_provider_text(first.get("code"), limit=40)
+
+    parts = []
+    if message:
+        parts.append(message)
+    if detail and detail.lower() != message.lower():
+        parts.append(detail)
+
+    text = ": ".join(parts) if parts else "QuickBooks rejected this document."
+    if code:
+        text = f"{text} (QuickBooks code {code})"
+    return text
+
+
+def _quickbooks_transport_message(payload: Dict[str, Any]) -> str:
+    raw = _safe_provider_text(payload.get("error") if isinstance(payload, dict) else "")
+    lowered = raw.lower()
+
+    if any(token in lowered for token in ("401", "unauthor", "token", "auth")):
+        return "QuickBooks authorization was rejected. Reconnect QuickBooks and try again."
+    if any(token in lowered for token in ("429", "rate", "limit")):
+        return "QuickBooks rate limit was reached. Wait a moment and try again."
+    if "timeout" in lowered:
+        return "QuickBooks did not respond in time. Please try again."
+    return "QuickBooks could not complete the request. Please try again."
 
 
 class DocumentService:
@@ -161,6 +205,22 @@ class DocumentService:
           - send to QB
           - per-item audit events (lean), batch envelope audit, and store successes
         """
+        operation_progress = AccountingOperationProgress.from_context(
+            self.context,
+            provider="quickbooks",
+            fallback_action=f"create-{self.doc_type.lower()}",
+        )
+        await operation_progress.queue_documents(
+            [
+                (document.transaction_id, get_original_filename(document.transaction_id))
+                for document in documents
+            ]
+        )
+        await operation_progress.mark_all_running(
+            progress=10,
+            message="Preparing document",
+        )
+
         try:
             document_payload_bulk: List[Dict[str, Any]] = []
             invoice_records: Dict[str, Dict[str, Any]] = {}
@@ -171,19 +231,34 @@ class DocumentService:
             for document in documents:
                 if not document.group_id or not document.group_id.strip():
                     await self._log("Group ID is required for invoice creation.", "error")
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(document.transaction_id),
+                        error="Group ID is required.",
+                    )
                     continue
 
                 if await self._record_exists(document.group_id, document.transaction_id):
                     dup_msg = (
                         f"{self.doc_type} for ({get_original_filename(document.transaction_id)}) "
-                        f"already recorded in {self.repo.integration}."
+                        f"was already sent to {self.repo.integration} and was not sent again."
                     )
                     await self._log(f"❌ {dup_msg}", "error")
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(document.transaction_id),
+                        error=dup_msg,
+                    )
                     existing_documents += 1
                     continue
 
                 if not document.items:
                     await self._log("Items required for invoice creation.", "error")
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(document.transaction_id),
+                        error="Items are required.",
+                    )
                     continue
 
                 key = safe_uuid_key(document.transaction_id)
@@ -191,7 +266,7 @@ class DocumentService:
                 items_map[key] = document.items
 
             if len(documents) == existing_documents:
-                raise Exception("No new documents to process.")
+                return operation_progress.result_payload()
 
             # Bulk create customers and items (bucketed)
             split_customers, split_items = [], []
@@ -214,6 +289,11 @@ class DocumentService:
                     if not reference_items:
                         await self._log(
                             f"No items created for document {document.transaction_id}.", "error"
+                        )
+                        await operation_progress.failed(
+                            document.transaction_id,
+                            filename=get_original_filename(document.transaction_id),
+                            error="Items could not be prepared.",
                         )
                         continue
 
@@ -248,12 +328,22 @@ class DocumentService:
                             f"❌ No valid line items after resolution for document {document.transaction_id}.",
                             "error",
                         )
+                        await operation_progress.failed(
+                            document.transaction_id,
+                            filename=get_original_filename(document.transaction_id),
+                            error="No valid line items could be prepared.",
+                        )
                         continue
 
                     valid_customer = customers_created.get(key) or None
                     if not valid_customer:
                         await self._log(
                             f"Customer creation failed for document {document.transaction_id}.", "error"
+                        )
+                        await operation_progress.failed(
+                            document.transaction_id,
+                            filename=get_original_filename(document.transaction_id),
+                            error="Customer could not be created.",
                         )
                         continue
 
@@ -274,6 +364,13 @@ class DocumentService:
                         "bId": bid,
                     }
                     document_payload_bulk.append(payload)
+                    await operation_progress.update(
+                        document.transaction_id,
+                        status="running",
+                        progress=65,
+                        filename=get_original_filename(document.transaction_id),
+                        message="Ready to send to QuickBooks",
+                    )
 
                     invoice_records[bid] = {
                         "group_id": document.group_id,
@@ -291,12 +388,21 @@ class DocumentService:
                     }
 
                 except Exception as e:
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(document.transaction_id),
+                        error=str(e),
+                    )
                     await self._log(
                         f"❌ Failed to process invoice for file {document.transaction_id}: {str(e)}", "error"
                     )
 
             if not document_payload_bulk:
-                return {"error": "No valid documents processed."}
+                await operation_progress.fail_remaining("No valid documents were processed.")
+                await operation_progress.fail_remaining(
+                    "No valid QuickBooks document could be prepared from the submitted data."
+                )
+                return operation_progress.result_payload()
 
             # Optional: a batch envelope event (nice for visibility)
             batch_event_id = (
@@ -337,6 +443,17 @@ class DocumentService:
                 method="POST",
             )
 
+            if quickbooks_response.get("error"):
+                await operation_progress.fail_remaining(
+                    _quickbooks_transport_message(quickbooks_response)
+                )
+                await sio.emit(
+                    "quickbooks-invoice-progress",
+                    {"progress": 100},
+                    room=self.context.client_id,
+                )
+                return operation_progress.result_payload()
+
             response_payload = quickbooks_response.get("BatchItemResponse", []) or []
             firestore_records: List[Dict[str, Any]] = []
 
@@ -359,12 +476,22 @@ class DocumentService:
                         error_details=None,
                         retryable=_is_retryable(payload),
                     )
+                    await operation_progress.failed(
+                        inv["transactionId"],
+                        filename=file,
+                        error=_quickbooks_fault_message(payload),
+                    )
                     await self._log(f"❌ Failed to create {inv.get('transactionType')} - document: {file}", "error")
                 else:
                     self.audit.ok(
                         event_id=item_event_id,
                         group_id=inv["group_id"],
                         transaction_id=inv["transactionId"],
+                    )
+                    await operation_progress.succeeded(
+                        inv["transactionId"],
+                        filename=file,
+                        message="Created in QuickBooks",
                     )
                     await self._log(
                         f"✅ {self.doc_type.capitalize()} processed successfully - document: {file}"
@@ -389,14 +516,18 @@ class DocumentService:
                     retryable=True,
                 )
 
+            await operation_progress.fail_remaining(
+                "QuickBooks did not return a result for this document."
+            )
             await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)
-            return quickbooks_response
+            return operation_progress.result_payload()
 
         except Exception as e:
             error_msg = f"❌ Error in bulk sending of {self.doc_type} documents: {str(e)}"
+            await operation_progress.fail_remaining(str(e))
             await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)
             await self._log(error_msg, "error")
-            return {"error": str(e)}
+            return operation_progress.result_payload()
 
     async def _ensure_item_id(self, i: Item) -> Optional[str]:
         """

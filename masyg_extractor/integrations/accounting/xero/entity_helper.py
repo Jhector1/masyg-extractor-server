@@ -37,21 +37,28 @@ class EntityHelper:
         """
         integration_entities = await self.fetch_all_entities(endpoint, name_field, id_field)
         integration_ids = {entity.get("Id") for entity in integration_entities}
-        integration_names = {entity.get("Name") for entity in integration_entities}
+        integration_by_name = {
+            entity.get("Name"): entity.get("Id")
+            for entity in integration_entities
+            if entity.get("Name") and entity.get("Id")
+        }
         non_existing_entities = []
         for entity in local_entities:
             if isinstance(entity, Customer):
+                if entity.id in integration_ids:
+                    continue
 
-                if entity.id is not None and entity.id not in integration_ids:
-                    non_existing_entities.append(entity)
+                provider_id = integration_by_name.get(entity.name)
+                if provider_id:
+                    # A local/extracted customer ID is not a Xero ContactID.
+                    # When Xero already has this customer by name, canonicalize
+                    # the local object to the provider identity immediately.
+                    entity.id = provider_id
+                    continue
 
-                else:
-                    if entity.name not in integration_names:
-                        non_existing_entities.append(entity)
-            else:
-                if entity.id not in integration_ids:
-                    non_existing_entities.append(entity)
-
+                non_existing_entities.append(entity)
+            elif entity.id not in integration_ids:
+                non_existing_entities.append(entity)
 
         return non_existing_entities
 
@@ -217,27 +224,66 @@ class EntityHelper:
             if (name_key in created_entity and
                 id_key in created_entity and
                 tracker_key in created_entity):
-                parts = re.split(r'_', created_entity[tracker_key])
-
-                tracker = parts[0]
+                tracker_value = str(created_entity[tracker_key])
+                if tracker_value.endswith("_"):
+                    # Customer payloads use "<logical-key>_" as the tracker.
+                    tracker = tracker_value[:-1]
+                elif "_" in tracker_value:
+                    # Xero item Codes use "<safe-transaction-key>_<sku>".
+                    tracker = tracker_value.split("_", 1)[0]
+                else:
+                    tracker = tracker_value
 
                 any_object = current_entities.get(tracker, [])
 
                 # print(any_object, name_key, id_key)
 
                 if isinstance(any_object, list):
-                    for local_entity in any_object:
-                        if local_entity.name == created_entity.get(name_key) and (local_entity.id is None or local_entity.id == ''):
-                            local_entity.name = created_entity.get(name_key)
-                            if isinstance(local_entity, Item):
-                                local_entity.sku = created_entity.get("Code")
+                    provider_code = created_entity.get("Code")
+                    matched_entity = None
 
-                            local_entity.id = created_entity.get(id_key)
-                            break
+                    if provider_code:
+                        for local_entity in any_object:
+                            if not isinstance(local_entity, Item):
+                                continue
+
+                            local_sku = str(local_entity.sku or "")
+                            expected_code = (
+                                local_sku
+                                if local_sku.startswith(f"{tracker}_")
+                                else f"{tracker}_{local_sku}"
+                                if local_sku
+                                else ""
+                            )
+                            if expected_code == provider_code:
+                                matched_entity = local_entity
+                                break
+
+                    if matched_entity is None:
+                        candidates = [
+                            local_entity
+                            for local_entity in any_object
+                            if local_entity.name == created_entity.get(name_key)
+                        ]
+                        if len(candidates) == 1:
+                            matched_entity = candidates[0]
+
+                    if matched_entity is not None:
+                        matched_entity.name = created_entity.get(name_key)
+                        if isinstance(matched_entity, Item):
+                            # Xero's returned Code is the authoritative ItemCode.
+                            # Never preserve local numeric ids such as "198".
+                            matched_entity.sku = provider_code
+                            matched_entity.id = provider_code
+                        elif matched_entity.id is None or matched_entity.id == "":
+                            matched_entity.id = created_entity.get(id_key)
                 else:
-                    if any_object.name == created_entity.get(name_key) and (any_object.id is None or any_object.id ==''):
+                    if any_object.name == created_entity.get(name_key):
                         any_object.name = created_entity.get(name_key)
-
+                        # This branch owns one logical entity per tracker key
+                        # (Xero customers). If Xero just created the entity,
+                        # its returned ID is authoritative even when the input
+                        # carried a local/non-provider ID such as "76".
                         any_object.id = created_entity.get(id_key)
 
         return current_entities

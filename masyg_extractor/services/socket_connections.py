@@ -60,6 +60,10 @@ class SocketConnectionRegistry:
                 self._by_client.pop(client_id, None)
             return client_id
 
+    async def client_id_for_sid(self, sid: str) -> str | None:
+        async with self._lock:
+            return self._by_sid.get(sid)
+
     async def current_sid(self, client_id: str) -> str | None:
         async with self._lock:
             return self._by_client.get(client_id)

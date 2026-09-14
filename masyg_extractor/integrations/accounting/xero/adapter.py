@@ -14,6 +14,7 @@ from masyg_extractor.integrations.accounting.core.integration_context import Int
 from masyg_extractor.integrations.accounting.xero.base_adapter import IntegrationClientAdapter
 
 from masyg_extractor.services.my_log import logger
+from masyg_extractor.integrations.accounting.xero.client import _normalize_xero_http_error as normalize_xero_http_error
 
 
 class XeroClientAdapter(IntegrationClientAdapter):
@@ -70,8 +71,21 @@ class XeroClientAdapter(IntegrationClientAdapter):
                 logger.info(f"Xero API Response: {response.status_code}")
 
                 return response_json
-            except httpx.RequestError as e:
-                error_message = f"Xero API Request Failed: {str(e)}"
-
-                logger.error(error_message)
-                return {"error": error_message}
+            except httpx.HTTPStatusError as exc:
+                normalized = normalize_xero_http_error(exc.response)
+                logger.warning(
+                    "Xero adapter rejected request status=%s error=%s",
+                    normalized["status_code"],
+                    normalized["error"],
+                )
+                return normalized
+            except httpx.RequestError as exc:
+                logger.warning(
+                    "Xero adapter transport failure error_type=%s",
+                    type(exc).__name__,
+                )
+                return {
+                    "error": "Xero service unavailable. Please try again.",
+                    "status_code": 502,
+                    "document_errors": [],
+                }

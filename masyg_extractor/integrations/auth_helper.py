@@ -184,8 +184,8 @@ class AuthHelper:
                     new_access_token,
                     new_refresh_token,
                     new_expires_in,
-
-                    id_token=token_data.get(self.extra_param)  # or token_data.get("id_token")
+                    id_token=token_data.get("id_token") or token_data.get(self.extra_param),
+                    tenant_id=token_data.get("tenant_id"),
                 )
 
             return JSONResponse({"message": "Token refreshed successfully.", "access_token": "new_access_token"})

@@ -1,5 +1,6 @@
 import asyncio
 from typing import Dict, List, cast
+from uuid import UUID
 
 from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
 from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
@@ -34,6 +35,16 @@ class CustomerService:
         except Exception as e:
             logger.error(f"Error sanitizing name '{name}': {str(e)}")
             return name
+
+    @staticmethod
+    def _is_xero_contact_id(value: object) -> bool:
+        if not value:
+            return False
+        try:
+            UUID(str(value))
+            return True
+        except (TypeError, ValueError, AttributeError):
+            return False
 
     @staticmethod
     def create_single_customer_payload(customer: Customer) -> dict:
@@ -180,8 +191,23 @@ class CustomerService:
                     local_customers, entity, payload, name_key, id_key, tracker_key="ContactNumber"
                 )
             )
-            logger.info(f"Bulk customer creation merged payload: {all_current_customers}")
-            return all_current_customers
+            resolved_customers: Dict[str, Customer] = {}
+            for key, customer in all_current_customers.items():
+                if self._is_xero_contact_id(customer.id):
+                    resolved_customers[key] = customer
+                else:
+                    logger.error(
+                        "Xero customer reconciliation produced a non-GUID "
+                        "ContactID for tracker %s; excluding it from invoice preparation.",
+                        key,
+                    )
+
+            logger.info(
+                "Bulk customer creation reconciled %s/%s Xero ContactIDs.",
+                len(resolved_customers),
+                len(all_current_customers),
+            )
+            return resolved_customers
         except Exception as e:
             logger.error(f"Error in create_customer_in_bulk: {str(e)}")
             return {}

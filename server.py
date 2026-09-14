@@ -196,6 +196,7 @@ register_routers(inner)
 from datetime import timezone
 
 from datetime import timezone, timedelta
+from masyg_extractor.integrations.accounting.shared.operation_progress import emit_accounting_operation_snapshot
 
 
 
@@ -369,6 +370,17 @@ async def disconnect(sid):
   client_id = await socket_connections.release(sid)
   logging.getLogger("masyg.socket").debug(
       "Client disconnected sid=%s client_id=%s", sid, client_id
+  )
+
+
+@sio.on("progress_request_snapshot")
+async def progress_request_snapshot(sid, _payload=None):
+  client_id = await socket_connections.client_id_for_sid(sid)
+  if not client_id:
+    return
+  await emit_accounting_operation_snapshot(
+      client_id,
+      to_sid=sid,
   )
 
 # ──────────────────────────────────────────────────────────────────────────────

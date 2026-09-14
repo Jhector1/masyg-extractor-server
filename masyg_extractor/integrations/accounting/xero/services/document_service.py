@@ -3,6 +3,7 @@ from pprint import pprint
 from typing import List, Dict, Any
 
 from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
+from masyg_extractor.integrations.accounting.shared.operation_progress import AccountingOperationProgress
 from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
 from masyg_extractor.integrations.accounting.core.models import Document
 from masyg_extractor.integrations.accounting.xero.entity_helper import EntityHelper
@@ -20,6 +21,28 @@ from masyg_extractor.utils.extensions import sio
 from masyg_extractor.utils.tool import get_original_filename
 
 #print
+
+def _xero_response_invoice_error(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+
+    messages: list[str] = []
+    validation_errors = payload.get("ValidationErrors")
+    if isinstance(validation_errors, list):
+        for entry in validation_errors:
+            if not isinstance(entry, dict):
+                continue
+            message = str(entry.get("Message") or "").strip()
+            if message and message not in messages:
+                messages.append(message)
+
+    if payload.get("HasErrors") and not messages:
+        message = str(payload.get("Message") or "").strip()
+        if message:
+            messages.append(message)
+
+    return "; ".join(messages) if messages else None
+
 class DocumentService:
     def __init__(self, doc_number_prefix: str, doc_type: str,  context: IntegrationContext,
                  repo: QuickBooksFirestoreService, client: IntegrationClientAdapter):
@@ -93,10 +116,26 @@ class DocumentService:
           - Sends invoices via the integration client.
           - Stores the processed invoice records in Firebase.
         """
-        print(len(documents), documents)
+        operation_progress = AccountingOperationProgress.from_context(
+            self.context,
+            provider="xero",
+            fallback_action=f"create-{self.doc_type.lower()}",
+        )
+        await operation_progress.queue_documents(
+            [
+                (document.transaction_id, get_original_filename(document.transaction_id))
+                for document in documents
+            ]
+        )
+        await operation_progress.mark_all_running(
+            progress=10,
+            message="Preparing document",
+        )
+
         try:
             document_payload_bulk = []
             invoice_records = []
+            prepared_documents = []
             customers_map, items_map = {}, {}
             existing_documents = 0
 
@@ -106,17 +145,32 @@ class DocumentService:
                 count += 1
                 if not document.group_id or not document.group_id.strip():
                     await self._log("Group ID is required for invoice creation.", "error")
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(document.transaction_id),
+                        error="Group ID is required.",
+                    )
                     continue
 
                 if await self._record_exists(document.group_id, document.transaction_id):
                     dup_msg = (f"{self.doc_type} for ({get_original_filename(document.transaction_id)}) "
                                "already recorded in Xero.")
                     await self._log(f"❌ {dup_msg}", "error")
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(document.transaction_id),
+                        error=dup_msg,
+                    )
                     existing_documents += 1
                     continue
 
                 if not document.items:
                     await self._log("Items required for invoice creation.", "error")
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(document.transaction_id),
+                        error="Items are required.",
+                    )
                     continue
 
                 key = safe_uuid_key(document.transaction_id)
@@ -125,8 +179,15 @@ class DocumentService:
 
 
             if len(documents) == existing_documents:
-
-                raise Exception("No new documents to process.")
+                await operation_progress.fail_remaining(
+                    "No new documents to process."
+                )
+                await sio.emit(
+                    "xero-invoice-progress",
+                    {"progress": 100},
+                    room=self.context.client_id,
+                )
+                return operation_progress.result_payload()
 
             # Create customers and items in bulk.
             customers_created = await self.customer_service.create_customer_in_bulk(customers_map)
@@ -142,6 +203,11 @@ class DocumentService:
                     if not reference_items:
                         await self._log(
                             f"No items created for document {document.transaction_id}.", "error"
+                        )
+                        await operation_progress.failed(
+                            document.transaction_id,
+                            filename=get_original_filename(document.transaction_id),
+                            error="Items could not be prepared.",
                         )
                         continue
 
@@ -159,6 +225,11 @@ class DocumentService:
                         await self._log(
                             f"Customer creation failed for document {document.transaction_id}.", "error"
                         )
+                        await operation_progress.failed(
+                            document.transaction_id,
+                            filename=get_original_filename(document.transaction_id),
+                            error="Customer could not be created.",
+                        )
                         continue
                     valid_customer_id = valid_customer.id
                     doc_number = generate_doc_number(self.doc_number_prefix)
@@ -173,12 +244,19 @@ class DocumentService:
                         "InvoiceNumber": doc_number,
                     }
                     document_payload_bulk.append(payload)
-                    await sio.emit("xero-invoice-progress", {"progress": 100}, room=self.context.client_id)
+                    prepared_documents.append(document)
+                    await operation_progress.update(
+                        document.transaction_id,
+                        status="running",
+                        progress=65,
+                        filename=get_original_filename(document.transaction_id),
+                        message="Ready to send to Xero",
+                    )
 
                     invoice_record = {
                         "group_id": document.group_id,
                         "transactionId": document.transaction_id,
-                        "integration": "quickbooks",
+                        "integration": "xero",
                         "transactionType": self.doc_type,
                         "docNumber": doc_number,
                         "customerId": valid_customer_id,
@@ -188,9 +266,12 @@ class DocumentService:
                         "metadata": {"syncToken": "0"}
                     }
                     invoice_records.append(invoice_record)
-                    await self._log(
-                        f"✅ {self.doc_type.capitalize()} processed for {document.customer.name} successfully")
                 except Exception as e:
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(document.transaction_id),
+                        error=str(e),
+                    )
                     await self._log(f"❌ Failed to process invoice for file {document.transaction_id}: {str(e)}",
                                     "error")
 
@@ -204,20 +285,116 @@ class DocumentService:
                     method="POST"
                 )
 
-                if "error" not in xero_response:
-                    pass
-                    await self.store_records_in_firebase(invoice_records)
-                return xero_response
+                provider_error_by_index: dict[int, str] = {}
+                raw_document_errors = xero_response.get("document_errors")
+                if isinstance(raw_document_errors, list):
+                    for entry in raw_document_errors:
+                        if not isinstance(entry, dict):
+                            continue
+                        try:
+                            index = int(entry.get("index"))
+                        except (TypeError, ValueError):
+                            continue
+                        message = str(entry.get("message") or "").strip()
+                        if message:
+                            provider_error_by_index[index] = message
 
-            return {"error": "No valid documents processed."}
+                successful_records = []
+                response_invoices = xero_response.get("Invoices")
+                if not isinstance(response_invoices, list):
+                    response_invoices = []
+
+                if "error" in xero_response:
+                    default_error = str(
+                        xero_response.get("error")
+                        or "Xero rejected this document."
+                    ).strip()
+                    for index, document in enumerate(prepared_documents):
+                        error_message = provider_error_by_index.get(
+                            index,
+                            default_error or "Xero rejected this document.",
+                        )
+                        await operation_progress.failed(
+                            document.transaction_id,
+                            filename=get_original_filename(document.transaction_id),
+                            error=error_message,
+                        )
+                        await self._log(
+                            f"❌ Failed to create {self.doc_type} "
+                            f"{get_original_filename(document.transaction_id)} in Xero: "
+                            f"{error_message}",
+                            "error",
+                        )
+                else:
+                    for index, document in enumerate(prepared_documents):
+                        provider_invoice = (
+                            response_invoices[index]
+                            if index < len(response_invoices)
+                            else None
+                        )
+                        provider_error = _xero_response_invoice_error(
+                            provider_invoice
+                        )
+                        if provider_error:
+                            await operation_progress.failed(
+                                document.transaction_id,
+                                filename=get_original_filename(document.transaction_id),
+                                error=provider_error,
+                            )
+                            await self._log(
+                                f"❌ Xero rejected {self.doc_type} "
+                                f"{get_original_filename(document.transaction_id)}: "
+                                f"{provider_error}",
+                                "error",
+                            )
+                            continue
+
+                        if index < len(invoice_records):
+                            successful_records.append(invoice_records[index])
+
+                        await operation_progress.succeeded(
+                            document.transaction_id,
+                            filename=get_original_filename(document.transaction_id),
+                            message="Created in Xero",
+                        )
+                        await self._log(
+                            f"✅ {self.doc_type.capitalize()} created in Xero for "
+                            f"{document.customer.name} "
+                            f"({get_original_filename(document.transaction_id)})"
+                        )
+
+                    if successful_records:
+                        await self.store_records_in_firebase(successful_records)
+
+                await operation_progress.fail_remaining(
+                    "Xero did not return a result for this document."
+                )
+                await sio.emit(
+                    "xero-invoice-progress",
+                    {"progress": 100},
+                    room=self.context.client_id,
+                )
+                return operation_progress.result_payload()
+
+            await operation_progress.fail_remaining(
+                "No valid documents were processed."
+            )
+            return operation_progress.result_payload()
 
         except Exception as e:
-            error_msg = f"❌ Error in bulk sending of {self.doc_type} documents: {str(e)}"
-            await sio.emit("xero-invoice-progress", {"progress": 100}, room=self.context.client_id)
-
-            await self._log(error_msg, "error")
-
-            return {"error": str(e)}
+            error_message = str(e).strip() or "Xero operation failed."
+            await operation_progress.fail_remaining(error_message)
+            await sio.emit(
+                "xero-invoice-progress",
+                {"progress": 100},
+                room=self.context.client_id,
+            )
+            await self._log(
+                f"❌ Error in bulk sending of {self.doc_type} documents: "
+                f"{error_message}",
+                "error",
+            )
+            return operation_progress.result_payload()
 
     async def send_document(self, document: Document, share_progress: float) -> Dict[str, Any] or str:
         """
