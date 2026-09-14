@@ -200,4 +200,3 @@ def test_known_distant_dates_are_not_reconciliation_candidates():
 
     assert "if day_delta > 3:" in reconciliation
     assert "return None" in reconciliation
-

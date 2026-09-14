@@ -270,4 +270,3 @@ def test_claimed_document_is_not_suggested_to_another_transaction():
     )
 
     assert result == []
-
