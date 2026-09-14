@@ -270,3 +270,53 @@ def test_claimed_document_is_not_suggested_to_another_transaction():
     )
 
     assert result == []
+
+
+def test_public_document_exposes_canonical_accounting_intent():
+    cases = (
+        ("purchase_receipt", "reconcile_expense"),
+        ("vendor_bill", "create_ap_bill"),
+        ("sales_invoice", "create_ar_invoice"),
+        ("sales_receipt", "create_sales_receipt"),
+        ("bank_statement", "reconcile_only"),
+        ("other", "review_required"),
+    )
+
+    for document_type, expected_intent in cases:
+        value = BankReconciliationService._public_document(
+            group_id="group-1",
+            file_id="document.pdf",
+            data={
+                "documentType": document_type,
+                "vendor_name": "Example",
+                "date": "2026-09-14",
+                "currency": "USD",
+                "line_items": [],
+            },
+        )
+
+        assert value["document_type"] == document_type
+        assert value["accounting_intent"] == expected_intent
+
+
+def test_public_document_uses_review_required_for_malformed_legacy_type(
+    monkeypatch,
+):
+    def invalid_intent(_document_type):
+        raise ValueError("invalid legacy type")
+
+    monkeypatch.setattr(
+        "masyg_extractor.integrations.bank.reconciliation.default_accounting_intent",
+        invalid_intent,
+    )
+
+    value = BankReconciliationService._public_document(
+        group_id="group-1",
+        file_id="legacy.pdf",
+        data={
+            "documentType": "legacy_invalid_type",
+            "line_items": [],
+        },
+    )
+
+    assert value["accounting_intent"] == "review_required"

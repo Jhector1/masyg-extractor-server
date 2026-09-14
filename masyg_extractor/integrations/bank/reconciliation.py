@@ -254,12 +254,26 @@ class BankReconciliationService:
         data: Mapping[str, Any],
     ) -> dict[str, Any]:
         document_type = str(data.get("documentType") or "other")
+
+        try:
+            accounting_intent = default_accounting_intent(
+                document_type
+            ).value
+        except (KeyError, TypeError, ValueError):
+            # Legacy or malformed persisted document types must not
+            # break the Bank reconciliation response. The canonical
+            # accounting owner treats these as requiring review.
+            accounting_intent = (
+                AccountingIntent.REVIEW_REQUIRED.value
+            )
+
         return {
             "group_id": group_id,
             "file_id": file_id,
             "vendor_name": data.get("vendor_name") or data.get("vendor"),
             "date": data.get("date"),
             "document_type": document_type,
+            "accounting_intent": accounting_intent,
             "amount": document_amount(data),
             "currency": _currency(data.get("currency")),
             "direction": document_direction(document_type),
