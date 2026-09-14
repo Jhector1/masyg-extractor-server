@@ -706,6 +706,106 @@ class BankReconciliationService:
             "reconciliation": state,
         }
 
+    async def bulk_set_status(
+        self,
+        *,
+        identities: list[Mapping[str, Any]],
+        reconciliation_status: str,
+    ) -> dict[str, Any]:
+        status_value = str(
+            reconciliation_status or ""
+        ).strip()
+
+        if status_value not in MANUAL_RECONCILIATION_STATUSES:
+            raise ValueError(
+                "Reconciliation status must be unreviewed, "
+                "missing_document, transfer, or ignored."
+            )
+
+        requested = list(identities or [])
+
+        if not requested or len(requested) > 100:
+            raise ValueError(
+                "Bulk reconciliation requires between "
+                "1 and 100 transactions."
+            )
+
+        results: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        updated = 0
+        failed = 0
+
+        for identity in requested:
+            item_id = str(
+                identity.get("item_id") or ""
+            ).strip()
+            transaction_id = str(
+                identity.get("transaction_id") or ""
+            ).strip()
+
+            if not item_id or not transaction_id:
+                failed += 1
+                results.append(
+                    {
+                        "item_id": item_id,
+                        "transaction_id": transaction_id,
+                        "status": "error",
+                        "error": "invalid_identity",
+                    }
+                )
+                continue
+
+            key = (item_id, transaction_id)
+
+            if key in seen:
+                failed += 1
+                results.append(
+                    {
+                        "item_id": item_id,
+                        "transaction_id": transaction_id,
+                        "status": "error",
+                        "error": "duplicate",
+                    }
+                )
+                continue
+
+            seen.add(key)
+
+            try:
+                await self.set_status(
+                    item_id=item_id,
+                    transaction_id=transaction_id,
+                    reconciliation_status=status_value,
+                )
+            except KeyError:
+                failed += 1
+                results.append(
+                    {
+                        "item_id": item_id,
+                        "transaction_id": transaction_id,
+                        "status": "error",
+                        "error": "not_found",
+                    }
+                )
+                continue
+
+            updated += 1
+            results.append(
+                {
+                    "item_id": item_id,
+                    "transaction_id": transaction_id,
+                    "status": "ok",
+                }
+            )
+
+        return {
+            "requested": len(requested),
+            "updated": updated,
+            "failed": failed,
+            "reconciliation_status": status_value,
+            "results": results,
+        }
+
     async def unmatch_transaction(
         self,
         *,

@@ -47,6 +47,19 @@ class UpdateBankTransactionStatusRequest(BaseModel):
     status: str = Field(min_length=1)
 
 
+class BulkBankTransactionIdentityRequest(BaseModel):
+    item_id: str = Field(min_length=1)
+    transaction_id: str = Field(min_length=1)
+
+
+class BulkUpdateBankTransactionStatusRequest(BaseModel):
+    transactions: list[BulkBankTransactionIdentityRequest] = Field(
+        min_length=1,
+        max_length=100,
+    )
+    status: str = Field(min_length=1)
+
+
 def _user_id(current_user: dict[str, Any]) -> str:
     user_id = str(current_user.get("userId") or "").strip()
     if not user_id:
@@ -270,6 +283,28 @@ async def update_bank_transaction_status(
         return await _reconciliation_for(current_user).set_status(
             item_id=payload.item_id,
             transaction_id=transaction_id,
+            reconciliation_status=payload.status,
+        )
+    except Exception as exc:
+        _raise_bank_error(exc)
+
+
+@router.post("/transactions/bulk-status")
+async def bulk_update_bank_transaction_status(
+    payload: BulkUpdateBankTransactionStatusRequest,
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
+    try:
+        return await _reconciliation_for(
+            current_user
+        ).bulk_set_status(
+            identities=[
+                {
+                    "item_id": identity.item_id,
+                    "transaction_id": identity.transaction_id,
+                }
+                for identity in payload.transactions
+            ],
             reconciliation_status=payload.status,
         )
     except Exception as exc:
