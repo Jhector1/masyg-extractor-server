@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 # Load local development configuration deterministically before importing modules
 # that read environment variables at import time. Runtime environment variables
@@ -197,6 +198,12 @@ from datetime import timezone
 
 from datetime import timezone, timedelta
 from masyg_extractor.integrations.accounting.shared.operation_progress import emit_accounting_operation_snapshot
+from masyg_extractor.integrations.bank.webhook_processor import (
+    process_pending_bank_webhooks,
+)
+from masyg_extractor.integrations.bank.webhook_repository import (
+    BankWebhookRepository,
+)
 
 
 
@@ -231,6 +238,17 @@ async def _startup():
     # attach scheduler to the current event loop
     scheduler = AsyncIOScheduler(timezone="America/Chicago")
 
+    # Repair reverse item ownership for Items connected before Plaid webhook
+    # routing existed. This runs only on the designated scheduler instance.
+    owner_backfill = await asyncio.to_thread(
+        BankWebhookRepository().backfill_item_owners
+    )
+    logger.info(
+        "Plaid bank item owner backfill scanned=%s registered=%s",
+        owner_backfill["scanned"],
+        owner_backfill["registered"],
+    )
+
     # if expire_free_trials / roll_failed_to_trash / purge_expired_trash are async,
     # AsyncIOScheduler will await them properly
     scheduler.add_job(
@@ -260,6 +278,16 @@ async def _startup():
         replace_existing=True,
         coalesce=True,
         misfire_grace_time=3600,
+        max_instances=1,
+    )
+
+    scheduler.add_job(
+        process_pending_bank_webhooks,
+        trigger=IntervalTrigger(seconds=30),
+        id="bank_webhook_inbox",
+        replace_existing=True,
+        coalesce=True,
+        misfire_grace_time=30,
         max_instances=1,
     )
 

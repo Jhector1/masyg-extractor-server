@@ -8,6 +8,10 @@ from typing import Any
 from cryptography.fernet import Fernet, InvalidToken
 from firebase_admin import firestore
 
+from masyg_extractor.integrations.bank.webhook_repository import (
+    BankWebhookRepository,
+)
+
 
 class BankRepositoryConfigurationError(RuntimeError):
     pass
@@ -38,6 +42,7 @@ class BankIntegrationRepository:
         self.user_id = user_id
         self.db = db if db is not None else firestore.client()
         self.fernet = fernet if fernet is not None else _fernet_from_env()
+        self.webhook_repository = BankWebhookRepository(db=self.db)
         self.bank_ref = (
             self.db.collection("users")
             .document(user_id)
@@ -76,6 +81,10 @@ class BankIntegrationRepository:
                 "updatedAt": now,
             },
             merge=True,
+        )
+        self.webhook_repository.register_item_owner(
+            item_id,
+            self.user_id,
         )
 
     def list_items(self) -> list[dict[str, Any]]:
@@ -175,6 +184,10 @@ class BankIntegrationRepository:
         for snapshot in item_ref.collection("transactions").stream():
             snapshot.reference.delete()
         item_ref.delete()
+        self.webhook_repository.unregister_item_owner(
+            item_id,
+            self.user_id,
+        )
 
     @staticmethod
     def public_item(item: dict[str, Any]) -> dict[str, Any]:

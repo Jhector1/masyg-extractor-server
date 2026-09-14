@@ -158,6 +158,21 @@ class PlaidClient:
     async def remove_item(self, access_token: str) -> dict[str, Any]:
         return await self._post("/item/remove", {"access_token": access_token})
 
+    async def get_webhook_verification_key(
+        self,
+        key_id: str,
+    ) -> dict[str, Any]:
+        response = await self._post(
+            "/webhook_verification_key/get",
+            {"key_id": key_id},
+        )
+        key = response.get("key")
+        if not isinstance(key, dict):
+            raise PlaidApiError(
+                "Bank connection provider did not return a webhook verification key."
+            )
+        return key
+
     async def sync_transactions(self, access_token: str, *, cursor: str | None) -> dict[str, Any]:
         payload: dict[str, Any] = {"access_token": access_token}
         if cursor is not None:

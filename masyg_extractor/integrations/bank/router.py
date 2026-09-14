@@ -1,18 +1,28 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from masyg_extractor.config.jwt_config import get_current_user_from_cookie
 from masyg_extractor.integrations.bank.plaid_client import PlaidApiError, PlaidConfigurationError
 from masyg_extractor.integrations.bank.repository import BankRepositoryConfigurationError
 from masyg_extractor.integrations.bank.service import BankService
+from masyg_extractor.integrations.bank.webhook_repository import (
+    BankWebhookRepository,
+)
+from masyg_extractor.integrations.bank.webhook_verifier import (
+    PlaidWebhookVerificationError,
+    PlaidWebhookVerifier,
+)
 from masyg_extractor.services.my_log import logger
 
 
 router = APIRouter(prefix="/integrations/bank", tags=["Bank"])
+_webhook_verifier = PlaidWebhookVerifier()
 
 
 class ExchangePublicTokenRequest(BaseModel):
@@ -62,6 +72,77 @@ def _raise_bank_error(exc: Exception) -> None:
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Bank integration request failed.",
     ) from exc
+
+
+@router.post("/webhook")
+async def plaid_webhook(request: Request):
+    # Plaid is the authenticated caller here, not a browser user.
+    # Verification must therefore happen against Plaid's signed JWT and the
+    # exact raw request body before JSON parsing.
+    raw_body = await request.body()
+    signed_jwt = request.headers.get("Plaid-Verification")
+
+    try:
+        claims = await _webhook_verifier.verify(raw_body, signed_jwt)
+    except PlaidWebhookVerificationError as exc:
+        logger.warning(
+            "Plaid webhook rejected verification_error=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Plaid webhook signature.",
+        ) from exc
+    except (PlaidConfigurationError, PlaidApiError) as exc:
+        logger.warning(
+            "Plaid webhook verification unavailable error_type=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Plaid webhook verification is unavailable.",
+        ) from exc
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Plaid webhook payload.",
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Plaid webhook payload.",
+        )
+
+    webhook_type = str(payload.get("webhook_type") or "").strip()
+    webhook_code = str(payload.get("webhook_code") or "").strip()
+    item_id = str(payload.get("item_id") or "").strip()
+
+    if not webhook_type or not webhook_code or not item_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Plaid webhook payload.",
+        )
+
+    repository = BankWebhookRepository()
+    delivery = await asyncio.to_thread(
+        repository.record_verified_event,
+        payload=payload,
+        claims=claims,
+        raw_body=raw_body,
+        signed_jwt=signed_jwt,
+    )
+
+    # B2 is durable ingestion/routing only. Processing is intentionally
+    # asynchronous in the next wave so Plaid receives a fast acknowledgement.
+    return {
+        "received": True,
+        "duplicate": not delivery["created"],
+        "routed": bool(delivery["user_id"]),
+    }
 
 
 @router.post("/link-token")

@@ -304,6 +304,15 @@ class BankService:
             "removed": len([value for value in removed if value]),
         }
 
+    async def sync_item(self, item_id: str) -> dict[str, int]:
+        item = await asyncio.to_thread(
+            self.repository.get_item,
+            item_id,
+        )
+        if not item:
+            raise KeyError("Bank connection not found.")
+        return await self._sync_item(item)
+
     async def sync_transactions(self) -> dict[str, Any]:
         items = await asyncio.to_thread(self.repository.list_items)
         if not items:
@@ -317,7 +326,10 @@ class BankService:
 
         totals = {"added": 0, "modified": 0, "removed": 0}
         for item in items:
-            result = await self._sync_item(item)
+            item_id = str(item.get("itemId") or "")
+            if not item_id:
+                continue
+            result = await self.sync_item(item_id)
             for key in totals:
                 totals[key] += result[key]
 
