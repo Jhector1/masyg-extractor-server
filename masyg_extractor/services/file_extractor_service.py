@@ -22,6 +22,7 @@ from firebase_admin import firestore as admin_fs
 from masyg_extractor.services.firestore_helpers import get_firestore_client
 from masyg_extractor.services.my_log import logger, send_log
 from masyg_extractor.services.progress_log import ExtractorProgressLog
+from masyg_extractor.documents.document_types import normalize_extracted_document
 from masyg_extractor.utils.extensions import sio
 from masyg_extractor.utils.tool import clean_text
 
@@ -278,17 +279,16 @@ async def process_chunk(chunk_text: str, progress_logger: ExtractorProgressLog, 
     Returns parsed JSON (dict) or None.
     """
     SYSTEM_PROMPT = (
-        "You extract structured purchasing documents. Supported documentType values include: "
-        "invoice, bill, receipt, quote, bid, estimate, purchase_order, statement. "
+        "You extract structured business documents. Classify documentType using exactly one of: "
+        "vendor_bill, sales_invoice, purchase_receipt, sales_receipt, vendor_credit, customer_credit, "
+        "purchase_order, quote_estimate, bank_statement, credit_card_statement, other. "
+        "A vendor_bill is a supplier/vendor invoice payable by the business; a sales_invoice is an invoice issued to a customer. "
         "Output a single JSON object in a code block. "
-        "Required top-level keys: documentType, vendor_name (string or null), date (string or null), "
+        "Required top-level keys: documentType, documentTypeConfidence (number 0 to 1), vendor_name (string or null), date (string or null), "
         "due_date (string or null), line_items (array). "
         "Each line_items entry should include: item_name (<=3 words if synthesized), category (string or null), "
-        "description (string), quantity (number or string), tax ('NON' or 'TAX' if visible else 'NON'), "
-        "sku (string; generate like 'TLP-45035' if absent), unit_price (number as string, no currency symbol). "
-        "If the PDF is a quote/bid/estimate/purchase order, still map items into line_items. "
-        "If some fields are not present, return null for them instead of failing. "
-        "Return ONLY one JSON object inside a fenced code block."
+        "description (string), quantity (number or string), tax('NON' or 'TAX' if visible else 'NON'), "
+        "sku (string; generate a stable SKU if absent), unit_price (number as string, no currency symbol). "
     )
 
     messages = [
@@ -337,7 +337,7 @@ async def process_text_with_gpt(
         progress["gpt_processing"] = gpt_stage_weight
         await _emit_progress_resilient(progress_logger, progress)
 
-        return result
+        return normalize_extracted_document(result)
 
     # Multiple chunks
     chunks = [pdf_text[i : i + 1500] for i in range(0, len(pdf_text), 1500)]
@@ -364,7 +364,7 @@ async def process_text_with_gpt(
             combined_result.setdefault("line_items", [])
             combined_result["line_items"].extend(result.get("line_items", []))
 
-    return combined_result
+    return normalize_extracted_document(combined_result)
 
 
 
