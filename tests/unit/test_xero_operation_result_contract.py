@@ -67,7 +67,15 @@ def test_xero_bulk_maps_provider_errors_to_documents():
     assert "document_errors" in service
     assert "_xero_response_invoice_error" in service
     assert "provider_error_by_index" in service
-    assert "Xero rejected this document." in service
+
+    tree = ast.parse(service)
+
+    assert any(
+        isinstance(node, ast.Constant)
+        and node.value
+        == "Xero rejected this document."
+        for node in ast.walk(tree)
+    )
 
 
 def test_xero_bulk_finalizes_confirmed_successes_and_uses_xero_identity():

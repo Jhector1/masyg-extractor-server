@@ -18,6 +18,9 @@ from masyg_extractor.integrations.accounting.quickbooks.services.item_service im
 from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
 from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
 from masyg_extractor.integrations.accounting.shared.operation_progress import AccountingOperationProgress
+from masyg_extractor.integrations.accounting.shared.provider_batching import (
+    chunk_accounting_provider_documents,
+)
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.accounting.shared.sku import generate_sku
 from masyg_extractor.services.log_manager import LogManager
@@ -202,7 +205,7 @@ class DocumentService:
           - dedupe/exists checks
           - bulk create customers/items
           - build batch payload (with bId per doc)
-          - send to QB
+          - send to QB in provider-safe document chunks
           - per-item audit events (lean), batch envelope audit, and store successes
         """
         operation_progress = AccountingOperationProgress.from_context(
@@ -223,7 +226,7 @@ class DocumentService:
 
         claimed_invoice_records: Dict[str, Dict[str, Any]] = {}
         settled_bids: set[str] = set()
-        provider_request_started = False
+        provider_started_bids: set[str] = set()
 
         try:
             document_payload_bulk: List[Dict[str, Any]] = []
@@ -458,189 +461,438 @@ class DocumentService:
                 )
                 return operation_progress.result_payload()
 
-            # Optional: a batch envelope event (nice for visibility)
-            batch_event_id = (
-                f"{self.doc_type}:Batch:{documents[0].transaction_id if documents else '-'}:"
-                f"{len(document_payload_bulk)}"
-            )
-            self.audit.start(
-                event_id=batch_event_id,
-                doc_type=self.doc_type,
-                entity_type=self.doc_type,
-                operation="batch_create",
-                transaction_id=None,
-                group_id=None,
-                idempotency_key=None,
-                payload={"BatchItemRequest": [p.get(self.doc_type, {}) for p in document_payload_bulk]},
+            document_chunks = (
+                chunk_accounting_provider_documents(
+                    "quickbooks",
+                    document_payload_bulk,
+                )
             )
 
-            # Start per-item PENDING events (so UI can show progress while waiting)
-            for bid, inv in invoice_records.items():
-                item_event_id = f"{self.doc_type}:{self.doc_type}:{inv['transactionId']}:{bid}"
+            for (
+                chunk_index,
+                document_chunk,
+            ) in enumerate(
+                document_chunks,
+                start=1,
+            ):
+                chunk_bids = [
+                    payload.get("bId")
+                    for payload in document_chunk
+                    if payload.get("bId")
+                ]
+
+                chunk_invoice_records = {
+                    bid: invoice_records[bid]
+                    for bid in chunk_bids
+                    if bid in invoice_records
+                }
+
+                if not chunk_invoice_records:
+                    continue
+
+                first_transaction_id = next(
+                    iter(
+                        chunk_invoice_records.values()
+                    )
+                )["transactionId"]
+
+                batch_event_id = (
+                    f"{self.doc_type}:Batch:"
+                    f"{first_transaction_id}:"
+                    f"{chunk_index}:"
+                    f"{len(document_chunk)}"
+                )
+
                 self.audit.start(
-                    event_id=item_event_id,
+                    event_id=batch_event_id,
                     doc_type=self.doc_type,
                     entity_type=self.doc_type,
-                    operation="create",
-                    transaction_id=inv["transactionId"],
-                    group_id=inv["group_id"],
-                    idempotency_key=bid,
-                    payload=None,
+                    operation="batch_create",
+                    transaction_id=None,
+                    group_id=None,
+                    idempotency_key=None,
+                    payload={
+                        "BatchItemRequest": [
+                            payload.get(
+                                self.doc_type,
+                                {},
+                            )
+                            for payload
+                            in document_chunk
+                        ]
+                    },
                 )
 
-            # Send only documents for which this request owns the
-            # canonical Firestore accounting claim.
-            bulk_payload = {"BatchItemRequest": document_payload_bulk}
-            provider_request_started = True
-            quickbooks_response = await self.client.request(
-                quickbooks_token=self.repo.get_integration_token(),
-                payload=bulk_payload,
-                endpoint="batch",
-                method="POST",
-            )
+                # Audit only the documents in the provider request
+                # that is about to start. A later unsent chunk must
+                # not look like a provider attempt.
+                for (
+                    bid,
+                    inv,
+                ) in chunk_invoice_records.items():
+                    item_event_id = (
+                        f"{self.doc_type}:"
+                        f"{self.doc_type}:"
+                        f"{inv['transactionId']}:"
+                        f"{bid}"
+                    )
 
-            if quickbooks_response.get("error"):
-                provider_error = _quickbooks_transport_message(
-                    quickbooks_response
+                    self.audit.start(
+                        event_id=item_event_id,
+                        doc_type=self.doc_type,
+                        entity_type=self.doc_type,
+                        operation="create",
+                        transaction_id=(
+                            inv["transactionId"]
+                        ),
+                        group_id=inv["group_id"],
+                        idempotency_key=bid,
+                        payload=None,
+                    )
+
+                bulk_payload = {
+                    "BatchItemRequest":
+                        document_chunk
+                }
+
+                # Resolve local credentials before a provider attempt
+                # is recorded. If token retrieval fails, no request
+                # reached QuickBooks and these claims remain releasable.
+                quickbooks_token = (
+                    self.repo.get_integration_token()
                 )
 
-                for bid, inv in invoice_records.items():
+                # From this point forward the provider outcome may be
+                # ambiguous for exactly these documents.
+                provider_started_bids.update(
+                    chunk_invoice_records.keys()
+                )
+
+                quickbooks_response = (
+                    await self.client.request(
+                        quickbooks_token=(
+                            quickbooks_token
+                        ),
+                        payload=bulk_payload,
+                        endpoint="batch",
+                        method="POST",
+                    )
+                )
+
+                if quickbooks_response.get(
+                    "error"
+                ):
+                    provider_error = (
+                        _quickbooks_transport_message(
+                            quickbooks_response
+                        )
+                    )
+
+                    # This chunk reached the provider boundary.
+                    # Preserve every claim as uncertain.
+                    for (
+                        bid,
+                        inv,
+                    ) in (
+                        chunk_invoice_records.items()
+                    ):
+                        await asyncio.to_thread(
+                            self.repo.mark_record_uncertain,
+                            record_type,
+                            inv["group_id"],
+                            inv["transactionId"],
+                            error=provider_error,
+                        )
+                        settled_bids.add(bid)
+
+                    # Later chunks have not reached QuickBooks.
+                    # Release those claims so a safe retry remains
+                    # possible rather than incorrectly blocking them
+                    # as uncertain.
+                    for (
+                        pending_bid,
+                        pending_inv,
+                    ) in (
+                        claimed_invoice_records.items()
+                    ):
+                        if (
+                            pending_bid
+                            in settled_bids
+                            or pending_bid
+                            in provider_started_bids
+                        ):
+                            continue
+
+                        await asyncio.to_thread(
+                            self.repo.release_record_claim,
+                            record_type,
+                            pending_inv["group_id"],
+                            pending_inv[
+                                "transactionId"
+                            ],
+                        )
+
+                        settled_bids.add(
+                            pending_bid
+                        )
+
+                        await operation_progress.failed(
+                            pending_inv[
+                                "transactionId"
+                            ],
+                            filename=(
+                                get_original_filename(
+                                    pending_inv[
+                                        "transactionId"
+                                    ]
+                                )
+                            ),
+                            error=(
+                                "QuickBooks batch stopped "
+                                "before this document was "
+                                "sent."
+                            ),
+                        )
+
+                    await operation_progress.fail_remaining(
+                        provider_error
+                    )
+
+                    await sio.emit(
+                        "quickbooks-invoice-progress",
+                        {"progress": 100},
+                        room=self.context.client_id,
+                    )
+
+                    return (
+                        operation_progress
+                        .result_payload()
+                    )
+
+                response_payload = (
+                    quickbooks_response.get(
+                        "BatchItemResponse",
+                        [],
+                    )
+                    or []
+                )
+
+                responded_bids: set[str] = set()
+
+                for payload in response_payload:
+                    bid = payload.get("bId")
+
+                    inv = (
+                        chunk_invoice_records
+                        .get(bid)
+                    )
+
+                    if not inv:
+                        continue
+
+                    responded_bids.add(bid)
+
+                    item_event_id = (
+                        f"{self.doc_type}:"
+                        f"{self.doc_type}:"
+                        f"{inv['transactionId']}:"
+                        f"{bid}"
+                    )
+
+                    file = get_original_filename(
+                        inv.get("transactionId")
+                    )
+
+                    if "Fault" in payload:
+                        self.audit.fail(
+                            event_id=item_event_id,
+                            group_id=(
+                                inv["group_id"]
+                            ),
+                            transaction_id=(
+                                inv[
+                                    "transactionId"
+                                ]
+                            ),
+                            error_category=(
+                                "Validation"
+                            ),
+                            error_message=(
+                                "QuickBooks returned "
+                                "Fault"
+                            ),
+                            error_details=None,
+                            retryable=(
+                                _is_retryable(
+                                    payload
+                                )
+                            ),
+                        )
+
+                        await operation_progress.failed(
+                            inv[
+                                "transactionId"
+                            ],
+                            filename=file,
+                            error=(
+                                _quickbooks_fault_message(
+                                    payload
+                                )
+                            ),
+                        )
+
+                        await asyncio.to_thread(
+                            self.repo.release_record_claim,
+                            record_type,
+                            inv["group_id"],
+                            inv[
+                                "transactionId"
+                            ],
+                        )
+
+                        settled_bids.add(bid)
+
+                        await self._log(
+                            f"❌ Failed to create "
+                            f"{inv.get('transactionType')} "
+                            f"- document: {file}",
+                            "error",
+                        )
+
+                    else:
+                        self.audit.ok(
+                            event_id=item_event_id,
+                            group_id=(
+                                inv["group_id"]
+                            ),
+                            transaction_id=(
+                                inv[
+                                    "transactionId"
+                                ]
+                            ),
+                        )
+
+                        await operation_progress.succeeded(
+                            inv[
+                                "transactionId"
+                            ],
+                            filename=file,
+                            message=(
+                                "Created in QuickBooks"
+                            ),
+                        )
+
+                        await self._log(
+                            f"✅ "
+                            f"{self.doc_type.capitalize()} "
+                            f"processed successfully "
+                            f"- document: {file}"
+                        )
+
+                        provider_entity = (
+                            payload.get(
+                                self.doc_type
+                            )
+                        )
+
+                        provider_document_id = (
+                            provider_entity.get(
+                                "Id"
+                            )
+                            if isinstance(
+                                provider_entity,
+                                dict,
+                            )
+                            else None
+                        )
+
+                        final_record = dict(inv)
+
+                        if provider_document_id:
+                            final_record[
+                                "providerDocumentId"
+                            ] = str(
+                                provider_document_id
+                            )
+
+                        await asyncio.to_thread(
+                            self.repo.finalize_record,
+                            record_type,
+                            inv["group_id"],
+                            inv[
+                                "transactionId"
+                            ],
+                            final_record,
+                        )
+
+                        settled_bids.add(bid)
+
+                # Missing result from a provider-started chunk is
+                # ambiguous. Preserve its duplicate barrier.
+                for (
+                    bid,
+                    inv,
+                ) in (
+                    chunk_invoice_records.items()
+                ):
+                    if bid in responded_bids:
+                        continue
+
                     await asyncio.to_thread(
                         self.repo.mark_record_uncertain,
                         record_type,
                         inv["group_id"],
                         inv["transactionId"],
-                        error=provider_error,
+                        error=(
+                            "QuickBooks did not "
+                            "return a result for "
+                            "this document."
+                        ),
                     )
+
                     settled_bids.add(bid)
 
-                await operation_progress.fail_remaining(provider_error)
-                await sio.emit(
-                    "quickbooks-invoice-progress",
-                    {"progress": 100},
-                    room=self.context.client_id,
+                any_success = any(
+                    "Fault" not in payload
+                    for payload
+                    in response_payload
                 )
-                return operation_progress.result_payload()
 
-            response_payload = (
-                quickbooks_response.get("BatchItemResponse", []) or []
-            )
-            responded_bids: set[str] = set()
-
-            for payload in response_payload:
-                bid = payload.get("bId")
-                inv = invoice_records.get(bid)
-                if not inv:
-                    continue
-
-                responded_bids.add(bid)
-
-                item_event_id = f"{self.doc_type}:{self.doc_type}:{inv['transactionId']}:{bid}"
-                file = get_original_filename(inv.get("transactionId"))
-
-                if "Fault" in payload:
-                    self.audit.fail(
-                        event_id=item_event_id,
-                        group_id=inv["group_id"],
-                        transaction_id=inv["transactionId"],
-                        error_category="Validation",
-                        error_message="QuickBooks returned Fault",
-                        error_details=None,
-                        retryable=_is_retryable(payload),
-                    )
-                    await operation_progress.failed(
-                        inv["transactionId"],
-                        filename=file,
-                        error=_quickbooks_fault_message(payload),
-                    )
-                    await asyncio.to_thread(
-                        self.repo.release_record_claim,
-                        record_type,
-                        inv["group_id"],
-                        inv["transactionId"],
-                    )
-                    settled_bids.add(bid)
-                    await self._log(
-                        f"❌ Failed to create "
-                        f"{inv.get('transactionType')} - document: {file}",
-                        "error",
+                if any_success:
+                    self.audit.ok(
+                        event_id=batch_event_id,
+                        group_id=None,
+                        transaction_id=None,
                     )
                 else:
-                    self.audit.ok(
-                        event_id=item_event_id,
-                        group_id=inv["group_id"],
-                        transaction_id=inv["transactionId"],
+                    self.audit.fail(
+                        event_id=batch_event_id,
+                        group_id=None,
+                        transaction_id=None,
+                        error_category="Unknown",
+                        error_message=(
+                            "All items failed"
+                        ),
+                        error_details=(
+                            quickbooks_response
+                        ),
+                        retryable=True,
                     )
-                    await operation_progress.succeeded(
-                        inv["transactionId"],
-                        filename=file,
-                        message="Created in QuickBooks",
-                    )
-                    await self._log(
-                        f"✅ {self.doc_type.capitalize()} "
-                        f"processed successfully - document: {file}"
-                    )
-
-                    provider_entity = payload.get(self.doc_type)
-                    provider_document_id = (
-                        provider_entity.get("Id")
-                        if isinstance(provider_entity, dict)
-                        else None
-                    )
-
-                    final_record = dict(inv)
-                    if provider_document_id:
-                        final_record["providerDocumentId"] = str(
-                            provider_document_id
-                        )
-
-                    await asyncio.to_thread(
-                        self.repo.finalize_record,
-                        record_type,
-                        inv["group_id"],
-                        inv["transactionId"],
-                        final_record,
-                    )
-                    settled_bids.add(bid)
-
-            # A claimed document with no corresponding batch result has
-            # an ambiguous provider outcome. Never silently retry it.
-            for bid, inv in invoice_records.items():
-                if bid in responded_bids:
-                    continue
-
-                await asyncio.to_thread(
-                    self.repo.mark_record_uncertain,
-                    record_type,
-                    inv["group_id"],
-                    inv["transactionId"],
-                    error=(
-                        "QuickBooks did not return a result for this "
-                        "document."
-                    ),
-                )
-                settled_bids.add(bid)
-
-            # any_success = any("Fault" not in p for p in response_payload)
-            any_success = any("Fault" not in p for p in response_payload)
-            if any_success:
-                self.audit.ok(event_id=batch_event_id, group_id=None, transaction_id=None)
-            else:
-                self.audit.fail(
-                    event_id=batch_event_id,
-                    group_id=None,
-                    transaction_id=None,
-                    error_category="Unknown",
-                    error_message="All items failed",
-                    error_details=quickbooks_response,
-                    retryable=True,
-                )
 
             await operation_progress.fail_remaining(
-                "QuickBooks did not return a result for this document."
+                "QuickBooks did not return a "
+                "result for this document."
             )
-            await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)
-            return operation_progress.result_payload()
+
+            await sio.emit(
+                "quickbooks-invoice-progress",
+                {"progress": 100},
+                room=self.context.client_id,
+            )
+
+            return (
+                operation_progress.result_payload()
+            )
 
         except Exception as e:
             claim_error = str(e).strip() or (
@@ -652,7 +904,7 @@ class DocumentService:
                     continue
 
                 try:
-                    if provider_request_started:
+                    if bid in provider_started_bids:
                         await asyncio.to_thread(
                             self.repo.mark_record_uncertain,
                             f"{self.doc_type.lower()}s",

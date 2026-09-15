@@ -4,6 +4,9 @@ from typing import List, Dict, Any
 
 from masyg_extractor.integrations.accounting.shared.identifiers import safe_uuid_key
 from masyg_extractor.integrations.accounting.shared.operation_progress import AccountingOperationProgress
+from masyg_extractor.integrations.accounting.shared.provider_batching import (
+    chunk_accounting_provider_documents,
+)
 from masyg_extractor.integrations.accounting.core.integration_context import IntegrationContext
 from masyg_extractor.integrations.accounting.core.models import Document
 from masyg_extractor.integrations.accounting.xero.entity_helper import EntityHelper
@@ -149,7 +152,7 @@ class DocumentService:
           - Performs a duplicate check.
           - Accumulates customer and item data for bulk creation.
           - Prepares payloads for invoice creation.
-          - Sends invoices via the integration client.
+          - Sends invoices in provider-safe request chunks.
           - Stores the processed invoice records in Firebase.
         """
         operation_progress = AccountingOperationProgress.from_context(
@@ -184,7 +187,7 @@ class DocumentService:
 
         claimed_records: Dict[str, Dict[str, Any]] = {}
         settled_transaction_ids: set[str] = set()
-        provider_request_started = False
+        provider_started_transaction_ids: set[str] = set()
 
         try:
             document_payload_bulk = []
@@ -465,113 +468,284 @@ class DocumentService:
                     )
                     return operation_progress.result_payload()
 
-                bulk_payload = {
-                    "Invoices": document_payload_bulk
-                }
-
-                provider_request_started = True
-                xero_response = await self.client.request(
-                    xero_token=self.repo.get_integration_token(),
-                    payload=bulk_payload,
-                    endpoint="Invoices",
-                    method="POST"
+                document_chunks = (
+                    chunk_accounting_provider_documents(
+                        "xero",
+                        document_payload_bulk,
+                    )
                 )
 
-                provider_error_by_index: dict[int, str] = {}
-                raw_document_errors = xero_response.get("document_errors")
-                if isinstance(raw_document_errors, list):
-                    for entry in raw_document_errors:
-                        if not isinstance(entry, dict):
-                            continue
-                        try:
-                            index = int(entry.get("index"))
-                        except (TypeError, ValueError):
-                            continue
-                        message = str(entry.get("message") or "").strip()
-                        if message:
-                            provider_error_by_index[index] = message
+                chunk_offset = 0
 
-                response_invoices = xero_response.get("Invoices")
-                if not isinstance(response_invoices, list):
-                    response_invoices = []
+                for document_chunk in document_chunks:
+                    chunk_size = len(document_chunk)
 
-                if "error" in xero_response:
-                    default_error = str(
-                        xero_response.get("error")
-                        or "Xero rejected this document."
-                    ).strip()
+                    chunk_documents = (
+                        prepared_documents[
+                            chunk_offset:
+                            chunk_offset + chunk_size
+                        ]
+                    )
 
-                    ambiguous_default = (
-                        _xero_provider_error_is_ambiguous(
-                            xero_response
+                    chunk_invoice_records = (
+                        invoice_records[
+                            chunk_offset:
+                            chunk_offset + chunk_size
+                        ]
+                    )
+
+                    chunk_offset += chunk_size
+
+                    if not (
+                        len(document_chunk)
+                        == len(chunk_documents)
+                        == len(chunk_invoice_records)
+                    ):
+                        raise RuntimeError(
+                            "Xero provider chunk alignment "
+                            "was lost."
+                        )
+
+                    bulk_payload = {
+                        "Invoices": document_chunk
+                    }
+
+                    # Resolve local credentials before marking this
+                    # chunk as provider-started. If token lookup fails,
+                    # none of these documents reached Xero.
+                    xero_token = (
+                        self.repo.get_integration_token()
+                    )
+
+                    chunk_transaction_ids = {
+                        document.transaction_id
+                        for document in chunk_documents
+                    }
+
+                    # From this boundary forward, only documents in
+                    # this chunk have an ambiguous provider outcome if
+                    # transport/execution fails.
+                    provider_started_transaction_ids.update(
+                        chunk_transaction_ids
+                    )
+
+                    xero_response = await self.client.request(
+                        xero_token=xero_token,
+                        payload=bulk_payload,
+                        endpoint="Invoices",
+                        method="POST"
+                    )
+
+                    provider_error_by_index: dict[
+                        int,
+                        str,
+                    ] = {}
+
+                    raw_document_errors = (
+                        xero_response.get(
+                            "document_errors"
                         )
                     )
 
-                    for index, document in enumerate(
-                        prepared_documents
+                    if isinstance(
+                        raw_document_errors,
+                        list,
                     ):
-                        error_message = (
-                            provider_error_by_index.get(
-                                index,
-                                default_error
-                                or "Xero rejected this document.",
+                        for entry in raw_document_errors:
+                            if not isinstance(
+                                entry,
+                                dict,
+                            ):
+                                continue
+
+                            try:
+                                index = int(
+                                    entry.get("index")
+                                )
+                            except (
+                                TypeError,
+                                ValueError,
+                            ):
+                                continue
+
+                            message = str(
+                                entry.get("message")
+                                or ""
+                            ).strip()
+
+                            if message:
+                                provider_error_by_index[
+                                    index
+                                ] = message
+
+                    response_invoices = (
+                        xero_response.get(
+                            "Invoices"
+                        )
+                    )
+
+                    if not isinstance(
+                        response_invoices,
+                        list,
+                    ):
+                        response_invoices = []
+
+                    if "error" in xero_response:
+                        default_error = str(
+                            xero_response.get("error")
+                            or (
+                                "Xero rejected this "
+                                "document."
+                            )
+                        ).strip()
+
+                        ambiguous_default = (
+                            _xero_provider_error_is_ambiguous(
+                                xero_response
                             )
                         )
 
-                        await operation_progress.failed(
-                            document.transaction_id,
-                            filename=get_original_filename(
-                                document.transaction_id
-                            ),
-                            error=error_message,
-                        )
-
-                        explicit_provider_rejection = (
-                            index in provider_error_by_index
-                        )
-
-                        if (
-                            ambiguous_default
-                            and not explicit_provider_rejection
+                        for (
+                            index,
+                            document,
+                        ) in enumerate(
+                            chunk_documents
                         ):
-                            await asyncio.to_thread(
-                                self.repo.mark_record_uncertain,
-                                record_type,
-                                document.group_id,
+                            error_message = (
+                                provider_error_by_index.get(
+                                    index,
+                                    default_error
+                                    or (
+                                        "Xero rejected this "
+                                        "document."
+                                    ),
+                                )
+                            )
+
+                            await operation_progress.failed(
                                 document.transaction_id,
+                                filename=(
+                                    get_original_filename(
+                                        document.transaction_id
+                                    )
+                                ),
                                 error=error_message,
                             )
-                        else:
+
+                            explicit_provider_rejection = (
+                                index
+                                in provider_error_by_index
+                            )
+
+                            if (
+                                ambiguous_default
+                                and not
+                                explicit_provider_rejection
+                            ):
+                                await asyncio.to_thread(
+                                    self.repo.mark_record_uncertain,
+                                    record_type,
+                                    document.group_id,
+                                    document.transaction_id,
+                                    error=error_message,
+                                )
+                            else:
+                                await asyncio.to_thread(
+                                    self.repo.release_record_claim,
+                                    record_type,
+                                    document.group_id,
+                                    document.transaction_id,
+                                )
+
+                            settled_transaction_ids.add(
+                                document.transaction_id
+                            )
+
+                            await self._log(
+                                f"❌ Failed to create "
+                                f"{self.doc_type} "
+                                f"{get_original_filename(document.transaction_id)} "
+                                f"in Xero: {error_message}",
+                                "error",
+                            )
+
+                        # A top-level Xero error stops this execution.
+                        # Claims belonging to later chunks have not
+                        # crossed the provider boundary and must remain
+                        # safely retryable.
+                        for (
+                            pending_transaction_id,
+                            pending_invoice_record,
+                        ) in claimed_records.items():
+                            if (
+                                pending_transaction_id
+                                in settled_transaction_ids
+                                or pending_transaction_id
+                                in provider_started_transaction_ids
+                            ):
+                                continue
+
+                            pending_group_id = (
+                                pending_invoice_record.get(
+                                    "group_id"
+                                )
+                            )
+
                             await asyncio.to_thread(
                                 self.repo.release_record_claim,
                                 record_type,
-                                document.group_id,
-                                document.transaction_id,
+                                pending_group_id,
+                                pending_transaction_id,
                             )
 
-                        settled_transaction_ids.add(
-                            document.transaction_id
+                            settled_transaction_ids.add(
+                                pending_transaction_id
+                            )
+
+                            await operation_progress.failed(
+                                pending_transaction_id,
+                                filename=(
+                                    get_original_filename(
+                                        pending_transaction_id
+                                    )
+                                ),
+                                error=(
+                                    "Xero batch stopped "
+                                    "before this document "
+                                    "was sent."
+                                ),
+                            )
+
+                        await operation_progress.fail_remaining(
+                            default_error
                         )
 
-                        await self._log(
-                            f"❌ Failed to create {self.doc_type} "
-                            f"{get_original_filename(document.transaction_id)} "
-                            f"in Xero: {error_message}",
-                            "error",
+                        await sio.emit(
+                            "xero-invoice-progress",
+                            {"progress": 100},
+                            room=self.context.client_id,
                         )
-                else:
-                    for index, document in enumerate(
-                        prepared_documents
+
+                        return (
+                            operation_progress
+                            .result_payload()
+                        )
+
+                    for (
+                        index,
+                        document,
+                    ) in enumerate(
+                        chunk_documents
                     ):
                         provider_invoice = (
                             response_invoices[index]
-                            if index < len(response_invoices)
+                            if index
+                            < len(response_invoices)
                             else None
                         )
 
-                        # Absence of a provider result is not proof of
-                        # failure. Keep the claim and resolve it as
-                        # uncertain below.
+                        # Missing result from this provider-started
+                        # chunk is ambiguous and is resolved below.
                         if provider_invoice is None:
                             continue
 
@@ -584,33 +758,44 @@ class DocumentService:
                         if provider_error:
                             await operation_progress.failed(
                                 document.transaction_id,
-                                filename=get_original_filename(
-                                    document.transaction_id
+                                filename=(
+                                    get_original_filename(
+                                        document.transaction_id
+                                    )
                                 ),
                                 error=provider_error,
                             )
+
                             await asyncio.to_thread(
                                 self.repo.release_record_claim,
                                 record_type,
                                 document.group_id,
                                 document.transaction_id,
                             )
+
                             settled_transaction_ids.add(
                                 document.transaction_id
                             )
+
                             await self._log(
-                                f"❌ Xero rejected {self.doc_type} "
+                                f"❌ Xero rejected "
+                                f"{self.doc_type} "
                                 f"{get_original_filename(document.transaction_id)}: "
                                 f"{provider_error}",
                                 "error",
                             )
+
                             continue
 
                         invoice_record = (
-                            invoice_records[index]
-                            if index < len(invoice_records)
+                            chunk_invoice_records[index]
+                            if index
+                            < len(
+                                chunk_invoice_records
+                            )
                             else {
-                                "group_id": document.group_id,
+                                "group_id":
+                                    document.group_id,
                                 "transactionId":
                                     document.transaction_id,
                                 "integration": "xero",
@@ -637,7 +822,9 @@ class DocumentService:
                         if provider_document_id:
                             final_record[
                                 "providerDocumentId"
-                            ] = str(provider_document_id)
+                            ] = str(
+                                provider_document_id
+                            )
 
                         provider_document_number = (
                             provider_invoice.get(
@@ -671,62 +858,70 @@ class DocumentService:
 
                         await operation_progress.succeeded(
                             document.transaction_id,
-                            filename=get_original_filename(
-                                document.transaction_id
+                            filename=(
+                                get_original_filename(
+                                    document.transaction_id
+                                )
                             ),
                             message="Created in Xero",
                         )
+
                         await self._log(
-                            f"✅ {self.doc_type.capitalize()} "
+                            f"✅ "
+                            f"{self.doc_type.capitalize()} "
                             f"created in Xero for "
                             f"{document.customer.name} "
                             f"({get_original_filename(document.transaction_id)})"
                         )
 
-                # Every claimed document must leave this provider call
-                # in a durable terminal/uncertain state. A missing
-                # provider result is ambiguous and must not be retried
-                # automatically.
-                for document in prepared_documents:
-                    if (
-                        document.transaction_id
-                        in settled_transaction_ids
-                    ):
-                        continue
-
-                    missing_result_error = (
-                        "Xero did not return a result for this "
-                        "document."
-                    )
-
-                    await asyncio.to_thread(
-                        self.repo.mark_record_uncertain,
-                        record_type,
-                        document.group_id,
-                        document.transaction_id,
-                        error=missing_result_error,
-                    )
-
-                    settled_transaction_ids.add(
-                        document.transaction_id
-                    )
-
-                    await operation_progress.failed(
-                        document.transaction_id,
-                        filename=get_original_filename(
+                    # Resolve only missing results from this exact
+                    # provider-started chunk. Later unsent chunks must
+                    # never become uncertain because an earlier Xero
+                    # request omitted a result.
+                    for document in chunk_documents:
+                        if (
                             document.transaction_id
-                        ),
-                        error=missing_result_error,
-                    )
+                            in settled_transaction_ids
+                        ):
+                            continue
+
+                        missing_result_error = (
+                            "Xero did not return a result "
+                            "for this document."
+                        )
+
+                        await asyncio.to_thread(
+                            self.repo.mark_record_uncertain,
+                            record_type,
+                            document.group_id,
+                            document.transaction_id,
+                            error=missing_result_error,
+                        )
+
+                        settled_transaction_ids.add(
+                            document.transaction_id
+                        )
+
+                        await operation_progress.failed(
+                            document.transaction_id,
+                            filename=(
+                                get_original_filename(
+                                    document.transaction_id
+                                )
+                            ),
+                            error=missing_result_error,
+                        )
 
                 await operation_progress.fail_remaining(
                     "Xero did not return a result for this document."
                 )
+
                 await sio.emit(
                     "xero-invoice-progress",
                     {"progress": 100},
                     room=self.context.client_id,
                 )
+
                 return operation_progress.result_payload()
 
             await operation_progress.fail_remaining(
@@ -755,7 +950,10 @@ class DocumentService:
                 )
 
                 try:
-                    if provider_request_started:
+                    if (
+                        transaction_id
+                        in provider_started_transaction_ids
+                    ):
                         await asyncio.to_thread(
                             self.repo.mark_record_uncertain,
                             record_type,

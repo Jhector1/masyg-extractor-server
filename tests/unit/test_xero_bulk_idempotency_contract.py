@@ -97,8 +97,12 @@ def test_xero_bulk_claims_before_provider_request():
 
     assert claim_pos < request_pos
     assert (
-        "provider_request_started = True"
+        "provider_started_transaction_ids.update("
         in bulk
+    )
+    assert (
+        "provider_request_started"
+        not in bulk
     )
 
 
@@ -162,3 +166,207 @@ def test_xero_bulk_no_longer_plain_stores_success_over_claim():
         not in bulk
     )
     assert "successful_records" not in bulk
+
+def test_xero_bulk_uses_shared_document_chunk_policy():
+    bulk = bulk_source()
+    normalized = "".join(
+        bulk.split()
+    )
+
+    assert (
+        'chunk_accounting_provider_documents('
+        '"xero",document_payload_bulk,)'
+        in normalized
+    )
+
+    assert (
+        '"Invoices":document_chunk'
+        in normalized
+    )
+
+
+def test_xero_chunk_alignment_preserves_payload_document_record_positions():
+    bulk = bulk_source()
+    normalized = "".join(
+        bulk.split()
+    )
+
+    assert (
+        "chunk_documents=(prepared_documents["
+        in normalized
+    )
+
+    assert (
+        "chunk_invoice_records=(invoice_records["
+        in normalized
+    )
+
+    assert (
+        "chunk_offset:chunk_offset+chunk_size"
+        in normalized
+    )
+
+    assert (
+        "len(document_chunk)"
+        "==len(chunk_documents)"
+        "==len(chunk_invoice_records)"
+        in normalized
+    )
+
+    service_tree = ast.parse(
+        SERVICE.read_text()
+    )
+
+    assert any(
+        isinstance(node, ast.Constant)
+        and node.value
+        == "Xero provider chunk alignment was lost."
+        for node in ast.walk(service_tree)
+    )
+
+
+def test_xero_provider_errors_are_chunk_relative():
+    bulk = bulk_source()
+    normalized = "".join(
+        bulk.split()
+    )
+
+    error_map = normalized.index(
+        "provider_error_by_index:"
+    )
+
+    chunk_loop = normalized.index(
+        "fordocument_chunkindocument_chunks:"
+    )
+
+    document_index_loop = normalized.index(
+        "for(index,document,)inenumerate("
+        "chunk_documents):",
+        chunk_loop,
+    )
+
+    assert (
+        chunk_loop
+        < error_map
+        < document_index_loop
+    )
+
+
+def test_xero_tracks_provider_start_per_document():
+    bulk = bulk_source()
+
+    assert (
+        "provider_started_transaction_ids: "
+        "set[str] = set()"
+        in bulk
+    )
+
+    token = bulk.index(
+        "xero_token = ("
+    )
+
+    started = bulk.index(
+        "provider_started_transaction_ids.update(",
+        token,
+    )
+
+    request = bulk.index(
+        "xero_response = await self.client.request(",
+        started,
+    )
+
+    assert token < started < request
+
+
+def test_xero_top_level_error_releases_only_unsent_later_chunks():
+    bulk = bulk_source()
+    normalized = "".join(
+        bulk.split()
+    )
+
+    top_error = normalized.index(
+        'if"error"inxero_response:'
+    )
+
+    pending_guard = normalized.index(
+        "pending_transaction_id"
+        "inprovider_started_transaction_ids",
+        top_error,
+    )
+
+    release = normalized.index(
+        "self.repo.release_record_claim",
+        pending_guard,
+    )
+
+    assert (
+        top_error
+        < pending_guard
+        < release
+    )
+
+    assert (
+        "Xero batch stopped "
+        in bulk
+    )
+    assert (
+        "before this document "
+        in bulk
+    )
+    assert (
+        '"was sent."'
+        in bulk
+    )
+
+
+def test_xero_missing_results_are_scoped_to_started_chunk():
+    bulk = bulk_source()
+
+    marker = bulk.index(
+        "# Resolve only missing results from this exact"
+    )
+
+    scoped = bulk[marker:]
+
+    assert (
+        "for document in chunk_documents:"
+        in scoped
+    )
+
+    assert (
+        "self.repo.mark_record_uncertain"
+        in scoped
+    )
+
+
+def test_xero_exception_cleanup_uses_per_document_provider_start():
+    bulk = bulk_source()
+    normalized = "".join(
+        bulk.split()
+    )
+
+    exception = normalized.index(
+        "exceptExceptionase:"
+    )
+
+    started_guard = normalized.index(
+        "if(transaction_id"
+        "inprovider_started_transaction_ids):",
+        exception,
+    )
+
+    uncertain = normalized.index(
+        "self.repo.mark_record_uncertain",
+        started_guard,
+    )
+
+    release = normalized.index(
+        "self.repo.release_record_claim",
+        uncertain,
+    )
+
+    assert (
+        started_guard
+        < uncertain
+        < release
+    )

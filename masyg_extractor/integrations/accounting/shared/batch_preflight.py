@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
+from masyg_extractor.integrations.accounting.registry import (
+    get_accounting_execution_action,
+)
+
 from masyg_extractor.integrations.accounting.shared.durable_status import (
     read_accounting_durable_status,
 )
@@ -71,18 +75,14 @@ def preflight_accounting_document(
         )
 
     try:
-        durable_status = (
-            read_accounting_durable_status(
-                repo,
-                provider=provider,
-                intent=accounting_intent,
-                group_id=group_id,
-                file_id=file_id,
-            )
+        get_accounting_execution_action(
+            provider,
+            accounting_intent,
         )
-    except ValueError:
-        # Unsupported provider/intent combinations are a normal
-        # preflight result. They must not become guessed actions.
+    except KeyError:
+        # The canonical backend execution registry owns whether a
+        # provider may execute this accounting intent. Never infer or
+        # guess an action from the document type.
         return {
             "provider": provider,
             "group_id": group_id,
@@ -96,6 +96,25 @@ def preflight_accounting_document(
             ),
             "durable_status": None,
         }
+
+    try:
+        durable_status = (
+            read_accounting_durable_status(
+                repo,
+                provider=provider,
+                intent=accounting_intent,
+                group_id=group_id,
+                file_id=file_id,
+            )
+        )
+    except ValueError as exc:
+        # A registered execution action without a corresponding
+        # durable-status owner is a backend configuration defect.
+        # Fail closed rather than misclassifying it as unsupported.
+        raise ValueError(
+            "Accounting execution capability and durable "
+            "status configuration are inconsistent."
+        ) from exc
 
     raw_status = str(
         durable_status.get("status") or ""

@@ -9,7 +9,21 @@ def test_quickbooks_bulk_returns_normalized_operation_result():
     assert "def _quickbooks_fault_message(" in source
     assert "def _quickbooks_transport_message(" in source
     assert 'payload.get("Fault")' in source
-    assert 'error=_quickbooks_fault_message(payload)' in source
+
+    normalized = "".join(
+        source.split()
+    )
+
+    assert (
+        "_quickbooks_fault_message(payload)"
+        in normalized
+    )
+
+    assert (
+        "error="
+        in normalized
+    )
+
     assert "return operation_progress.result_payload()" in source
 
     method_start = source.index("async def send_document_in_bulk")
