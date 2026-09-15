@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Iterable, Mapping
 
 from masyg_extractor.integrations.accounting.registry import (
@@ -45,6 +46,7 @@ def preflight_accounting_document(
     *,
     provider: str,
     handoff: Mapping[str, Any],
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     provider = str(provider or "").strip().lower()
 
@@ -105,6 +107,7 @@ def preflight_accounting_document(
                 intent=accounting_intent,
                 group_id=group_id,
                 file_id=file_id,
+                now=now,
             )
         )
     except ValueError as exc:
@@ -120,10 +123,24 @@ def preflight_accounting_document(
         durable_status.get("status") or ""
     ).strip()
 
+    recovery_required = (
+        durable_status.get(
+            "recovery_required"
+        )
+        is True
+    )
+
     state = (
-        "ready"
-        if raw_status == "none"
-        else raw_status
+        "uncertain"
+        if (
+            raw_status == "sending"
+            and recovery_required
+        )
+        else (
+            "ready"
+            if raw_status == "none"
+            else raw_status
+        )
     )
 
     if state not in {
@@ -143,7 +160,12 @@ def preflight_accounting_document(
         "document_type": document_type,
         "accounting_intent": accounting_intent,
         "state": state,
-        "reason": None,
+        "reason": (
+            "The accounting operation needs verification "
+            "before another provider action is allowed."
+            if recovery_required
+            else None
+        ),
         "durable_status": durable_status,
     }
 

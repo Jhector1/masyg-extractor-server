@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -33,13 +34,20 @@ class FakeRepo:
         return self.records.get(key)
 
 
-def status(repo, provider, intent):
+def status(
+    repo,
+    provider,
+    intent,
+    *,
+    now=None,
+):
     return read_accounting_durable_status(
         repo,
         provider=provider,
         intent=intent,
         group_id="group-1",
         file_id="file-1",
+        now=now,
     )
 
 
@@ -100,6 +108,8 @@ def test_missing_record_returns_none_state():
         "completed_at": None,
         "claimed_at": None,
         "uncertain_at": None,
+        "recovery_required": False,
+        "recovery_reason": None,
         "legacy": False,
     }
 
@@ -166,6 +176,159 @@ def test_sending_record_remains_sending():
     assert (
         result["claimed_at"]
         == "2026-09-15T01:00:00Z"
+    )
+
+
+def test_recent_sending_record_does_not_require_recovery():
+    repo = FakeRepo(
+        {
+            (
+                "bills",
+                "group-1",
+                "file-1",
+            ): {
+                "status": "sending",
+                "claimedAt": "2026-09-15T01:45:01Z",
+            }
+        }
+    )
+
+    result = status(
+        repo,
+        "xero",
+        "create_ap_bill",
+        now=datetime(
+            2026,
+            9,
+            15,
+            2,
+            15,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    assert result["status"] == "sending"
+    assert result["recovery_required"] is False
+    assert result["recovery_reason"] is None
+
+
+def test_sending_record_becomes_recovery_required_at_exact_boundary():
+    repo = FakeRepo(
+        {
+            (
+                "bills",
+                "group-1",
+                "file-1",
+            ): {
+                "status": "sending",
+                "claimedAt": "2026-09-15T01:45:00Z",
+            }
+        }
+    )
+
+    result = status(
+        repo,
+        "xero",
+        "create_ap_bill",
+        now=datetime(
+            2026,
+            9,
+            15,
+            2,
+            15,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    # The durable owner stays "sending". Recovery metadata is a
+    # read-model signal only; it never releases the claim.
+    assert result["status"] == "sending"
+    assert result["recovery_required"] is True
+    assert (
+        result["recovery_reason"]
+        == "stale_sending"
+    )
+
+
+def test_sending_without_valid_claim_timestamp_fails_closed():
+    for claimed_at in (
+        None,
+        "",
+        "not-a-timestamp",
+        "2026-09-15T01:00:00",
+    ):
+        repo = FakeRepo(
+            {
+                (
+                    "bills",
+                    "group-1",
+                    "file-1",
+                ): {
+                    "status": "sending",
+                    "claimedAt": claimed_at,
+                }
+            }
+        )
+
+        result = status(
+            repo,
+            "xero",
+            "create_ap_bill",
+            now=datetime(
+                2026,
+                9,
+                15,
+                2,
+                15,
+                0,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        assert result["status"] == "sending"
+        assert result["recovery_required"] is True
+        assert (
+            result["recovery_reason"]
+            == "unverifiable_sending"
+        )
+
+
+def test_future_sending_timestamp_fails_closed():
+    repo = FakeRepo(
+        {
+            (
+                "bills",
+                "group-1",
+                "file-1",
+            ): {
+                "status": "sending",
+                "claimedAt": "2026-09-15T02:15:01Z",
+            }
+        }
+    )
+
+    result = status(
+        repo,
+        "xero",
+        "create_ap_bill",
+        now=datetime(
+            2026,
+            9,
+            15,
+            2,
+            15,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    assert result["status"] == "sending"
+    assert result["recovery_required"] is True
+    assert (
+        result["recovery_reason"]
+        == "unverifiable_sending"
     )
 
 

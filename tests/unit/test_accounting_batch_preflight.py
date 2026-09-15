@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from masyg_extractor.integrations.accounting.shared.batch_preflight import (
@@ -61,6 +62,95 @@ def test_xero_ap_bill_without_record_is_ready():
         "bills",
         "group-1",
         "file-1",
+    )
+
+
+def test_stale_sending_maps_to_needs_verification_bucket():
+    repo = FakeRepo(
+        {
+            (
+                "bills",
+                "group-1",
+                "file-1",
+            ): {
+                "status": "sending",
+                "claimedAt": "2026-09-15T01:45:00Z",
+            },
+        }
+    )
+
+    result = preflight_accounting_document(
+        repo,
+        provider="xero",
+        handoff=handoff(),
+        now=datetime(
+            2026,
+            9,
+            15,
+            2,
+            15,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    assert result["state"] == "uncertain"
+    assert (
+        result["durable_status"]["status"]
+        == "sending"
+    )
+    assert (
+        result["durable_status"][
+            "recovery_required"
+        ]
+        is True
+    )
+    assert (
+        result["durable_status"][
+            "recovery_reason"
+        ]
+        == "stale_sending"
+    )
+
+    # Never turn a stale sending claim into ready.
+    assert result["state"] != "ready"
+
+
+def test_recent_sending_remains_processing():
+    repo = FakeRepo(
+        {
+            (
+                "bills",
+                "group-1",
+                "file-1",
+            ): {
+                "status": "sending",
+                "claimedAt": "2026-09-15T01:45:01Z",
+            },
+        }
+    )
+
+    result = preflight_accounting_document(
+        repo,
+        provider="xero",
+        handoff=handoff(),
+        now=datetime(
+            2026,
+            9,
+            15,
+            2,
+            15,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    assert result["state"] == "sending"
+    assert (
+        result["durable_status"][
+            "recovery_required"
+        ]
+        is False
     )
 
 

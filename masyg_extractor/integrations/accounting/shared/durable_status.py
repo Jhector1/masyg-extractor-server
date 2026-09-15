@@ -1,7 +1,86 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+
+ACCOUNTING_SENDING_RECOVERY_AFTER = timedelta(
+    minutes=30,
+)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_utc_timestamp(
+    value: Any,
+) -> datetime | None:
+    rendered = _string_or_none(value)
+
+    if rendered is None:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(
+            rendered.replace(
+                "Z",
+                "+00:00",
+            )
+        )
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return None
+
+    return parsed.astimezone(timezone.utc)
+
+
+def _sending_recovery_metadata(
+    *,
+    status: str,
+    claimed_at: str | None,
+    now: datetime | None,
+) -> tuple[bool, str | None]:
+    if status != "sending":
+        return False, None
+
+    claimed = _parse_utc_timestamp(
+        claimed_at
+    )
+
+    if claimed is None:
+        # A sending record without a trustworthy ownership timestamp
+        # must stay create-blocking, but it cannot safely be treated
+        # as an actively progressing operation forever.
+        return True, "unverifiable_sending"
+
+    current = now or _utc_now()
+
+    if current.tzinfo is None:
+        current = current.replace(
+            tzinfo=timezone.utc
+        )
+    else:
+        current = current.astimezone(
+            timezone.utc
+        )
+
+    if claimed > current:
+        # A claim timestamp in the future is not a trustworthy
+        # active-processing signal. Keep ownership intact and require
+        # verification rather than showing Processing indefinitely.
+        return True, "unverifiable_sending"
+
+    if (
+        current - claimed
+        >= ACCOUNTING_SENDING_RECOVERY_AFTER
+    ):
+        return True, "stale_sending"
+
+    return False, None
 
 
 @dataclass(frozen=True)
@@ -79,6 +158,7 @@ def _public_status(
     record_type: str,
     record: dict[str, Any] | None,
     legacy: bool,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     if record is None:
         return {
@@ -93,6 +173,8 @@ def _public_status(
             "completed_at": None,
             "claimed_at": None,
             "uncertain_at": None,
+            "recovery_required": False,
+            "recovery_reason": None,
             "legacy": False,
         }
 
@@ -117,6 +199,19 @@ def _public_status(
         or record.get("docNumber")
     )
 
+    claimed_at = _string_or_none(
+        record.get("claimedAt")
+    )
+
+    (
+        recovery_required,
+        recovery_reason,
+    ) = _sending_recovery_metadata(
+        status=status,
+        claimed_at=claimed_at,
+        now=now,
+    )
+
     return {
         "provider": provider,
         "intent": intent,
@@ -133,12 +228,12 @@ def _public_status(
         "completed_at": _string_or_none(
             record.get("completedAt")
         ),
-        "claimed_at": _string_or_none(
-            record.get("claimedAt")
-        ),
+        "claimed_at": claimed_at,
         "uncertain_at": _string_or_none(
             record.get("uncertainAt")
         ),
+        "recovery_required": recovery_required,
+        "recovery_reason": recovery_reason,
         "legacy": bool(legacy),
     }
 
@@ -150,6 +245,7 @@ def read_accounting_durable_status(
     intent: str,
     group_id: str,
     file_id: str,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     provider = str(provider or "").strip().lower()
     intent = str(intent or "").strip()
@@ -181,6 +277,7 @@ def read_accounting_durable_status(
             record_type=lookup.record_type,
             record=record,
             legacy=False,
+            now=now,
         )
 
     # Historical Xero accounting normalization appended "-0"
@@ -219,6 +316,7 @@ def read_accounting_durable_status(
                 record_type=legacy_record_type,
                 record=legacy_record,
                 legacy=True,
+                now=now,
             )
 
     return _public_status(
@@ -229,4 +327,5 @@ def read_accounting_durable_status(
         record_type=lookup.record_type,
         record=None,
         legacy=False,
+        now=now,
     )
