@@ -70,14 +70,14 @@ def test_xero_bulk_maps_provider_errors_to_documents():
     assert "Xero rejected this document." in service
 
 
-def test_xero_bulk_stores_only_successful_records_and_uses_xero_identity():
+def test_xero_bulk_finalizes_confirmed_successes_and_uses_xero_identity():
     service = source(
         "masyg_extractor/integrations/accounting/xero/services/document_service.py"
     )
 
     assert '"integration": "xero"' in service
-    assert "successful_records" in service
-    assert "await self.store_records_in_firebase(successful_records)" in service
+    assert "self.repo.finalize_record" in service
+    assert '"providerDocumentId"' in service
 
 
 def test_xero_bulk_does_not_dump_full_documents_to_stdout():

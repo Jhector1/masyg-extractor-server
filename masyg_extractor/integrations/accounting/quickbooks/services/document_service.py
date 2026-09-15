@@ -221,6 +221,10 @@ class DocumentService:
             message="Preparing document",
         )
 
+        claimed_invoice_records: Dict[str, Dict[str, Any]] = {}
+        settled_bids: set[str] = set()
+        provider_request_started = False
+
         try:
             document_payload_bulk: List[Dict[str, Any]] = []
             invoice_records: Dict[str, Dict[str, Any]] = {}
@@ -397,6 +401,56 @@ class DocumentService:
                         f"❌ Failed to process invoice for file {document.transaction_id}: {str(e)}", "error"
                     )
 
+            record_type = f"{self.doc_type.lower()}s"
+            claimed_payloads: List[Dict[str, Any]] = []
+
+            for candidate_payload in document_payload_bulk:
+                bid = candidate_payload.get("bId")
+                inv = invoice_records.get(bid)
+
+                if not bid or not inv:
+                    continue
+
+                action = (
+                    "create_sales_receipt"
+                    if self.doc_type.lower() == "salesreceipt"
+                    else "create_ar_invoice"
+                )
+
+                claimed = await asyncio.to_thread(
+                    self.repo.claim_record,
+                    record_type,
+                    inv["group_id"],
+                    inv["transactionId"],
+                    {
+                        **inv,
+                        "action": action,
+                    },
+                )
+
+                if not claimed:
+                    dup_msg = (
+                        f"{self.doc_type} for "
+                        f"({get_original_filename(inv['transactionId'])}) "
+                        f"was already claimed or sent to "
+                        f"{self.repo.integration} and was not sent again."
+                    )
+                    await self._log(f"❌ {dup_msg}", "error")
+                    await operation_progress.failed(
+                        inv["transactionId"],
+                        filename=get_original_filename(
+                            inv["transactionId"]
+                        ),
+                        error=dup_msg,
+                    )
+                    continue
+
+                claimed_payloads.append(candidate_payload)
+                claimed_invoice_records[bid] = inv
+
+            document_payload_bulk = claimed_payloads
+            invoice_records = claimed_invoice_records
+
             if not document_payload_bulk:
                 await operation_progress.fail_remaining("No valid documents were processed.")
                 await operation_progress.fail_remaining(
@@ -434,8 +488,10 @@ class DocumentService:
                     payload=None,
                 )
 
-            # Send batch
+            # Send only documents for which this request owns the
+            # canonical Firestore accounting claim.
             bulk_payload = {"BatchItemRequest": document_payload_bulk}
+            provider_request_started = True
             quickbooks_response = await self.client.request(
                 quickbooks_token=self.repo.get_integration_token(),
                 payload=bulk_payload,
@@ -444,9 +500,21 @@ class DocumentService:
             )
 
             if quickbooks_response.get("error"):
-                await operation_progress.fail_remaining(
-                    _quickbooks_transport_message(quickbooks_response)
+                provider_error = _quickbooks_transport_message(
+                    quickbooks_response
                 )
+
+                for bid, inv in invoice_records.items():
+                    await asyncio.to_thread(
+                        self.repo.mark_record_uncertain,
+                        record_type,
+                        inv["group_id"],
+                        inv["transactionId"],
+                        error=provider_error,
+                    )
+                    settled_bids.add(bid)
+
+                await operation_progress.fail_remaining(provider_error)
                 await sio.emit(
                     "quickbooks-invoice-progress",
                     {"progress": 100},
@@ -454,14 +522,18 @@ class DocumentService:
                 )
                 return operation_progress.result_payload()
 
-            response_payload = quickbooks_response.get("BatchItemResponse", []) or []
-            firestore_records: List[Dict[str, Any]] = []
+            response_payload = (
+                quickbooks_response.get("BatchItemResponse", []) or []
+            )
+            responded_bids: set[str] = set()
 
             for payload in response_payload:
                 bid = payload.get("bId")
                 inv = invoice_records.get(bid)
                 if not inv:
                     continue
+
+                responded_bids.add(bid)
 
                 item_event_id = f"{self.doc_type}:{self.doc_type}:{inv['transactionId']}:{bid}"
                 file = get_original_filename(inv.get("transactionId"))
@@ -481,7 +553,18 @@ class DocumentService:
                         filename=file,
                         error=_quickbooks_fault_message(payload),
                     )
-                    await self._log(f"❌ Failed to create {inv.get('transactionType')} - document: {file}", "error")
+                    await asyncio.to_thread(
+                        self.repo.release_record_claim,
+                        record_type,
+                        inv["group_id"],
+                        inv["transactionId"],
+                    )
+                    settled_bids.add(bid)
+                    await self._log(
+                        f"❌ Failed to create "
+                        f"{inv.get('transactionType')} - document: {file}",
+                        "error",
+                    )
                 else:
                     self.audit.ok(
                         event_id=item_event_id,
@@ -494,12 +577,49 @@ class DocumentService:
                         message="Created in QuickBooks",
                     )
                     await self._log(
-                        f"✅ {self.doc_type.capitalize()} processed successfully - document: {file}"
+                        f"✅ {self.doc_type.capitalize()} "
+                        f"processed successfully - document: {file}"
                     )
-                    firestore_records.append(inv)
 
-            if firestore_records:
-                await self.store_records_in_firebase(firestore_records)
+                    provider_entity = payload.get(self.doc_type)
+                    provider_document_id = (
+                        provider_entity.get("Id")
+                        if isinstance(provider_entity, dict)
+                        else None
+                    )
+
+                    final_record = dict(inv)
+                    if provider_document_id:
+                        final_record["providerDocumentId"] = str(
+                            provider_document_id
+                        )
+
+                    await asyncio.to_thread(
+                        self.repo.finalize_record,
+                        record_type,
+                        inv["group_id"],
+                        inv["transactionId"],
+                        final_record,
+                    )
+                    settled_bids.add(bid)
+
+            # A claimed document with no corresponding batch result has
+            # an ambiguous provider outcome. Never silently retry it.
+            for bid, inv in invoice_records.items():
+                if bid in responded_bids:
+                    continue
+
+                await asyncio.to_thread(
+                    self.repo.mark_record_uncertain,
+                    record_type,
+                    inv["group_id"],
+                    inv["transactionId"],
+                    error=(
+                        "QuickBooks did not return a result for this "
+                        "document."
+                    ),
+                )
+                settled_bids.add(bid)
 
             # any_success = any("Fault" not in p for p in response_payload)
             any_success = any("Fault" not in p for p in response_payload)
@@ -523,7 +643,42 @@ class DocumentService:
             return operation_progress.result_payload()
 
         except Exception as e:
-            error_msg = f"❌ Error in bulk sending of {self.doc_type} documents: {str(e)}"
+            claim_error = str(e).strip() or (
+                "QuickBooks operation failed unexpectedly."
+            )
+
+            for bid, inv in claimed_invoice_records.items():
+                if bid in settled_bids:
+                    continue
+
+                try:
+                    if provider_request_started:
+                        await asyncio.to_thread(
+                            self.repo.mark_record_uncertain,
+                            f"{self.doc_type.lower()}s",
+                            inv["group_id"],
+                            inv["transactionId"],
+                            error=claim_error,
+                        )
+                    else:
+                        await asyncio.to_thread(
+                            self.repo.release_record_claim,
+                            f"{self.doc_type.lower()}s",
+                            inv["group_id"],
+                            inv["transactionId"],
+                        )
+                except Exception as cleanup_error:
+                    logger.error(
+                        "Failed to settle QuickBooks accounting claim "
+                        "transaction=%s error=%s",
+                        inv.get("transactionId"),
+                        cleanup_error,
+                    )
+
+            error_msg = (
+                f"❌ Error in bulk sending of {self.doc_type} "
+                f"documents: {str(e)}"
+            )
             await operation_progress.fail_remaining(str(e))
             await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)
             await self._log(error_msg, "error")
@@ -575,119 +730,3 @@ class DocumentService:
             return str(i.id)
 
         return None
-
-    async def send_document(self, document: Document, share_progress: float) -> Dict[str, Any] | str:
-        """
-        Creates a single document (Invoice or SalesReceipt depending on subclass usage).
-        NOTE: The audit decorator should be applied in subclasses so doc_type is correct.
-        """
-        log_manager = LogManager()
-        try:
-            await log_manager.clear_queue()
-
-            # Progress updates
-            for step in range(5):
-                await asyncio.sleep(0.3)
-                self.context.progress[f"creating_{self.doc_type}"] = (
-                    (step + 1) / 5
-                ) * IntegrationsProgressLog.CREATING_ITEM_WEIGHT
-                await self.context.progress_logger.safe_emit_progress(self.context.progress)
-
-            if not document.group_id or not document.group_id.strip():
-                return {"error": "Group ID is required for invoice creation."}
-
-            if await self._record_exists(document.group_id, document.transaction_id):
-                msg = (
-                    f"{self.doc_type} for ({get_original_filename(document.transaction_id)}) "
-                    f"already recorded in {self.repo.integration}."
-                )
-                await asyncio.sleep(1)
-                await self.context.log_manager.send_log(
-                    f"❌ {msg}",
-                    log_key=f"{self.doc_type.lower()}-log-message",
-                    user_room=self.context.client_id,
-                )
-                await asyncio.sleep(1)
-                raise Exception(msg)
-
-            valid_customer_id = await self.customer_service.get_or_create_customer(document.customer)
-            if not document.items:
-                logger.info("No items provided for document.")
-                return {"error": "Items required for document creation."}
-
-            line_items = []
-            for item in document.items:
-                # ensure item exists or create
-                if not await self.item_service.check_item_exists(item):
-                    new_id = await self.item_service.create_item(item)
-                    if new_id:
-                        item.id = new_id
-                    else:
-                        logger.error("Failed to create item: Received invalid item ID")
-                qty = int(item.quantity or 0)
-                unit_price = float(item.unit_price or 0.0)
-                amount = qty * unit_price
-                tax_code = item.tax_code
-
-                line_items.append({
-                    "DetailType": "SalesItemLineDetail",
-                    "Amount": amount,
-                    "Description": item.description or "",
-                    "SalesItemLineDetail": {
-                        # If you want to include ItemRef after creating/ensuring, add it here
-                        # "ItemRef": {"value": str(item.id)} if item.id else None,
-                        "Qty": qty,
-                        "UnitPrice": unit_price,
-                        "TaxCodeRef": {"value": tax_code},
-                    },
-                })
-
-            date = document.date
-            doc_number = generate_doc_number(self.doc_number_prefix)
-            customer_name = document.customer.name
-
-            qb_payload = {
-                "CustomerRef": {"value": valid_customer_id, "name": customer_name},
-                "AutoDocNumber": False,
-                "Line": line_items,
-                "TxnDate": format_date(date),
-                "CurrencyRef": {"value": "USD"},
-                "DocNumber": doc_number,
-            }
-            payload = {"BatchItemRequest": [qb_payload]}
-
-            document_id = await self.entity_helper.create_entity(self.doc_type, payload)
-
-            if self.context.user_id:
-                total_amount = sum(float(it.quantity or 0) * float(it.unit_price or 0) for it in document.items)
-                document_record = {
-                    "integration": "quickbooks",
-                    "transactionType": self.doc_type,
-                    "transactionId": document.transaction_id,
-                    "docNumber": doc_number,
-                    "customerId": valid_customer_id,
-                    "date": document.date,
-                    "amount": total_amount,
-                    "metadata": {"syncToken": "0"},
-                }
-                await asyncio.to_thread(
-                    self.repo.store_record,
-                    f"{self.doc_type.lower()}s",
-                    document.group_id,
-                    document.transaction_id,
-                    document_record,
-                )
-
-            if document_id and int(document_id) > 0:
-                await self._log(
-                    f"✅ {self.doc_type.capitalize()} sent and processed "
-                    f"{get_original_filename(document.transaction_id)} for {document.customer.name} successfully"
-                )
-
-            return document_id
-
-        except Exception as e:
-            error_msg = f"❌ Failed to create {self.doc_type.lower()} for file {document.transaction_id}: {str(e)}"
-            await sio.emit("quickbooks-invoice-progress", {"progress": 100}, room=self.context.client_id)
-            await self._log(error_msg, "error")
-            return {"error": str(e)}

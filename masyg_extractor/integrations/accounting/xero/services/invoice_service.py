@@ -7,6 +7,9 @@ from masyg_extractor.integrations.accounting.xero.base_adapter import Integratio
 from masyg_extractor.integrations.accounting.xero.services.document_service import DocumentService
 from masyg_extractor.integrations.accounting.xero.services.item_service import ItemService
 from masyg_extractor.integrations.accounting.shared.firestore_repository import QuickBooksFirestoreService
+from masyg_extractor.integrations.accounting.shared.single_send_compat import (
+    run_single_via_bulk,
+)
 from masyg_extractor.integrations.accounting.xero.services.customer_service import CustomerService
 
 
@@ -22,20 +25,21 @@ class InvoiceService(DocumentService):
         self.entity_helper = EntityHelper(context, repo, client)
 
     async def send_invoice(
-            self,
-
-            invoice: Invoice,
-            # items: List[Item],
-            # transaction_id: str,
-
-            # customer: Customer,
-            share_progress: float
-
-    ) -> Dict[str, Any]:
+        self,
+        invoice: Invoice,
+        share_progress: float,
+    ) -> Dict[str, Any] | str:
         """
-        Asynchronously creates an invoice in QuickBooks and stores key invoice info in Firestore.
+        Preserve the legacy single-invoice API while delegating creation
+        to the canonical atomic Xero bulk owner.
         """
-        return await super().send_document(invoice, share_progress)
+        return await run_single_via_bulk(
+            invoice,
+            share_progress,
+            send_bulk=super().send_document_in_bulk,
+            repo=self.repo,
+            record_type="invoices",
+        )
 
     async def send_invoice_in_bulk(
             self,
@@ -49,7 +53,7 @@ class InvoiceService(DocumentService):
 
     ) -> Dict[str, Any]:
         """
-        Asynchronously creates an invoice in QuickBooks and stores key invoice info in Firestore.
+        Creates Xero invoices through the canonical document service.
         """
         return await super().send_document_in_bulk(invoices, share_progress)
 

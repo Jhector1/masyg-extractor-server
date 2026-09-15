@@ -208,7 +208,7 @@ async def handle_quickbooks_request(
     logger.info(f"Client ID: {client_id}")
 
     # Create integration context and repository
-    repo = QuickBooksFirestoreService(user_id=user_id)
+    repo = QuickBooksFirestoreService(user_id=user_id, integration="xero")
     context = create_integration_context(
         log_manager=log_mgr,
         request=request,

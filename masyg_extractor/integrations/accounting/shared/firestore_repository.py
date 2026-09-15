@@ -1,10 +1,33 @@
 from firebase_admin import firestore
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any
+
+from google.api_core.exceptions import AlreadyExists
+
 from masyg_extractor.services.my_log import logger
 
-# Initialize the Firestore client once at app startup.
-_FIRESTORE_DB = firestore.client()
+# Keep one shared Firestore client, but do not create it at module-import
+# time. Unit tests and CLI tooling must be able to import repository types
+# without requiring an initialized Firebase application.
+_FIRESTORE_DB = None
+
+
+def _get_firestore_db():
+    global _FIRESTORE_DB
+
+    if _FIRESTORE_DB is None:
+        _FIRESTORE_DB = firestore.client()
+
+    return _FIRESTORE_DB
+
+
+def _utc_now_iso() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 class FirestoreRepository:
@@ -20,7 +43,7 @@ class FirestoreRepository:
             raise ValueError("integration name is required.")
         self.user_id = user_id
         self.integration = integration
-        self.db = _FIRESTORE_DB
+        self.db = _get_firestore_db()
 
     def _get_doc_ref(self, *path_segments) -> Any:
         """
@@ -95,6 +118,163 @@ class QuickBooksFirestoreService(FirestoreRepository):
         exists = self.document_exists(doc_ref)
         logger.info(f"{record_type.capitalize()} exists check for transaction {transaction_id} under group {group_id}: {exists}")
         return exists
+
+    def get_record(
+        self,
+        record_type: str,
+        group_id: str,
+        transaction_id: str,
+    ) -> Dict[str, Any] | None:
+        """Return the durable accounting record when it exists."""
+        doc_ref = self._get_transaction_doc_ref(
+            record_type,
+            group_id,
+            transaction_id,
+        )
+        snapshot = doc_ref.get()
+        if not snapshot.exists:
+            return None
+
+        data = snapshot.to_dict() or {}
+        return data if isinstance(data, dict) else None
+
+    def claim_record(
+        self,
+        record_type: str,
+        group_id: str,
+        transaction_id: str,
+        data: Dict[str, Any] | None = None,
+    ) -> bool:
+        """
+        Atomically reserve the canonical accounting record.
+
+        Firestore DocumentReference.create() succeeds only when the
+        document does not already exist. That turns the existing
+        durable transaction record into the idempotency owner without
+        introducing a second persistence hierarchy.
+        """
+        doc_ref = self._get_transaction_doc_ref(
+            record_type,
+            group_id,
+            transaction_id,
+        )
+
+        payload: Dict[str, Any] = {
+            **(data or {}),
+            "status": "sending",
+            "integration": self.integration,
+            "group_id": group_id,
+            "transactionId": transaction_id,
+            "claimedAt": _utc_now_iso(),
+        }
+
+        try:
+            doc_ref.create(payload)
+            logger.info(
+                "Claimed %s record for transaction %s under group %s",
+                record_type,
+                transaction_id,
+                group_id,
+            )
+            return True
+        except AlreadyExists:
+            logger.info(
+                "%s record is already claimed or completed for "
+                "transaction %s under group %s",
+                record_type.capitalize(),
+                transaction_id,
+                group_id,
+            )
+            return False
+
+    def finalize_record(
+        self,
+        record_type: str,
+        group_id: str,
+        transaction_id: str,
+        data: Dict[str, Any],
+    ) -> None:
+        """Finalize an owned claim as a successful provider result."""
+        doc_ref = self._get_transaction_doc_ref(
+            record_type,
+            group_id,
+            transaction_id,
+        )
+
+        payload: Dict[str, Any] = {
+            **data,
+            "status": "succeeded",
+            "integration": self.integration,
+            "group_id": group_id,
+            "transactionId": transaction_id,
+            "completedAt": _utc_now_iso(),
+        }
+        self.store_document(doc_ref, payload, merge=True)
+
+    def mark_record_uncertain(
+        self,
+        record_type: str,
+        group_id: str,
+        transaction_id: str,
+        *,
+        error: str,
+    ) -> None:
+        """
+        Preserve the claim when the provider outcome is ambiguous.
+
+        A timeout/network failure can happen after the provider created
+        the remote object. Keeping the claim prevents an automatic retry
+        from silently creating a duplicate.
+        """
+        doc_ref = self._get_transaction_doc_ref(
+            record_type,
+            group_id,
+            transaction_id,
+        )
+        self.store_document(
+            doc_ref,
+            {
+                "status": "uncertain",
+                "lastError": str(error or ""),
+                "uncertainAt": _utc_now_iso(),
+            },
+            merge=True,
+        )
+
+    def release_record_claim(
+        self,
+        record_type: str,
+        group_id: str,
+        transaction_id: str,
+    ) -> bool:
+        """
+        Release only an in-flight claim.
+
+        Successful or uncertain records are intentionally never removed
+        by this helper.
+        """
+        doc_ref = self._get_transaction_doc_ref(
+            record_type,
+            group_id,
+            transaction_id,
+        )
+        snapshot = doc_ref.get()
+
+        if not snapshot.exists:
+            return False
+
+        data = snapshot.to_dict() or {}
+        if data.get("status") != "sending":
+            return False
+
+        doc_ref.delete()
+        logger.info(
+            "Released %s claim for transaction %s under group %s",
+            record_type,
+            transaction_id,
+            group_id,
+        )
+        return True
 
     # Specific transaction record methods
     def store_invoice(self, group_id: str, transaction_id: str, data: Dict[str, Any]) -> None:
