@@ -34,35 +34,94 @@ def bulk_source() -> str:
     )
 
 
-def test_quickbooks_bulk_claims_before_accounting_document_request():
+def test_quickbooks_bulk_claims_before_all_provider_mutations():
     bulk = bulk_source()
     normalized = "".join(bulk.split())
 
     claim = normalized.index(
         "self.repo.claim_record"
     )
-    request = normalized.index(
+
+    customer_create = normalized.index(
+        "self.customer_service.create_customer_in_bulk("
+    )
+
+    item_create = normalized.index(
+        "self.item_service.create_item_in_bulk("
+    )
+
+    ensure_item = normalized.index(
+        "self._ensure_item_id(i)"
+    )
+
+    document_request = normalized.index(
         "quickbooks_response=(awaitself.client.request("
     )
 
-    assert claim < request
+    assert (
+        claim
+        < customer_create
+        < item_create
+        < ensure_item
+        < document_request
+    )
+
     assert (
         "provider_started_bids.update("
         in bulk
     )
+
     assert (
         "provider_request_started"
         not in bulk
     )
 
 
-def test_quickbooks_bulk_only_sends_claimed_payloads():
+def test_quickbooks_bulk_only_prepares_claimed_documents():
     bulk = bulk_source()
+    normalized = "".join(bulk.split())
 
-    assert "claimed_payloads" in bulk
-    assert "claimed_invoice_records" in bulk
-    assert "document_payload_bulk = claimed_payloads" in bulk
-    assert "invoice_records = claimed_invoice_records" in bulk
+    claim = normalized.index(
+        "self.repo.claim_record"
+    )
+
+    owned_append = normalized.index(
+        "claimed_documents.append(document)",
+        claim,
+    )
+
+    customer_map = normalized.index(
+        "customers_map[key]=document.customer",
+        owned_append,
+    )
+
+    item_map = normalized.index(
+        "items_map[key]=document.items",
+        owned_append,
+    )
+
+    provider_customer_create = normalized.index(
+        "self.customer_service.create_customer_in_bulk(",
+        item_map,
+    )
+
+    assert (
+        claim
+        < owned_append
+        < customer_map
+        < item_map
+        < provider_customer_create
+    )
+
+    assert (
+        "for document in claimed_documents:"
+        in bulk
+    )
+
+    assert (
+        "claimed_invoice_records"
+        in bulk
+    )
 
 
 def test_quickbooks_bulk_settles_all_claim_outcomes():
@@ -249,3 +308,41 @@ def test_quickbooks_missing_results_are_scoped_to_started_chunk():
         "self.repo.mark_record_uncertain"
         in bulk[missing:]
     )
+
+
+def test_quickbooks_preparation_failures_release_early_claim():
+    bulk = bulk_source()
+
+    assert (
+        "async def release_preparation_claim("
+        in bulk
+    )
+
+    assert (
+        "await release_preparation_claim("
+        in bulk
+    )
+
+    helper = bulk.index(
+        "async def release_preparation_claim("
+    )
+
+    release = bulk.index(
+        "self.repo.release_record_claim",
+        helper,
+    )
+
+    document_request = bulk.index(
+        "quickbooks_response = (",
+        release,
+    )
+
+    assert release < document_request
+
+
+def test_quickbooks_has_only_one_claim_site_in_bulk_owner():
+    bulk = bulk_source()
+
+    assert bulk.count(
+        "self.repo.claim_record"
+    ) == 1

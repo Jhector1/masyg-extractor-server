@@ -193,6 +193,7 @@ class DocumentService:
             document_payload_bulk = []
             invoice_records = []
             prepared_documents = []
+            claimed_documents = []
             customers_map, items_map = {}, {}
             existing_documents = 0
 
@@ -260,12 +261,75 @@ class DocumentService:
                     )
                     continue
 
-                key = safe_uuid_key(document.transaction_id)
+                provisional_record = {
+                    "group_id": document.group_id,
+                    "transactionId":
+                        document.transaction_id,
+                    "integration": "xero",
+                    "transactionType": self.doc_type,
+                    "date": document.date,
+                    "amount": sum(
+                        float(item.quantity or 0)
+                        * float(item.unit_price or 0)
+                        for item in document.items
+                    ),
+                    "metadata": {
+                        "syncToken": "0"
+                    },
+                    "action": action,
+                    "invoiceStatus": invoice_status,
+                }
+
+                claimed = await asyncio.to_thread(
+                    self.repo.claim_record,
+                    record_type,
+                    document.group_id,
+                    document.transaction_id,
+                    provisional_record,
+                )
+
+                if not claimed:
+                    dup_msg = (
+                        f"{self.doc_type} for "
+                        f"({get_original_filename(document.transaction_id)}) "
+                        f"was already claimed or sent to Xero and "
+                        f"was not sent again."
+                    )
+
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(
+                            document.transaction_id
+                        ),
+                        error=dup_msg,
+                    )
+
+                    await self._log(
+                        f"❌ {dup_msg}",
+                        "error",
+                    )
+
+                    continue
+
+                claimed_records[
+                    document.transaction_id
+                ] = provisional_record
+
+                claimed_documents.append(
+                    document
+                )
+
+                key = safe_uuid_key(
+                    document.transaction_id
+                )
+
+                # Only documents that own the durable claim may
+                # participate in provider-side Contact/Item work.
                 customers_map[key] = document.customer
                 items_map[key] = document.items
 
 
-            if len(documents) == existing_documents:
+            if not claimed_documents:
                 await operation_progress.fail_remaining(
                     "No new documents to process."
                 )
@@ -280,9 +344,35 @@ class DocumentService:
             customers_created = await self.customer_service.create_customer_in_bulk(customers_map)
             items_created = await self.item_service.create_item_in_bulk(items_map)
 
-            # Build payloads for each document.
-            # Build payloads for each document.
-            for document in documents:
+            async def release_preparation_claim(
+                document: Document,
+            ) -> None:
+                transaction_id = (
+                    document.transaction_id
+                )
+
+                if (
+                    transaction_id
+                    in settled_transaction_ids
+                    or transaction_id
+                    not in claimed_records
+                ):
+                    return
+
+                await asyncio.to_thread(
+                    self.repo.release_record_claim,
+                    record_type,
+                    document.group_id,
+                    transaction_id,
+                )
+
+                settled_transaction_ids.add(
+                    transaction_id
+                )
+
+            # Build payloads only for documents that own the
+            # durable accounting claim acquired above.
+            for document in claimed_documents:
                 try:
                     key = safe_uuid_key(document.transaction_id)
                     # extract_uuid Use a default empty list if no items were created for this key.
@@ -296,6 +386,11 @@ class DocumentService:
                             filename=get_original_filename(document.transaction_id),
                             error="Items could not be prepared.",
                         )
+
+                        await release_preparation_claim(
+                            document
+                        )
+
                         continue
 
                     line_items = [{
@@ -317,6 +412,11 @@ class DocumentService:
                             filename=get_original_filename(document.transaction_id),
                             error="Customer could not be created.",
                         )
+
+                        await release_preparation_claim(
+                            document
+                        )
+
                         continue
                     valid_customer_id = valid_customer.id
                     doc_number = generate_doc_number(self.doc_number_prefix)
@@ -352,121 +452,33 @@ class DocumentService:
                             float(item.quantity or 0) * float(item.unit_price or 0) for item in document.items),
                         "metadata": {"syncToken": "0"}
                     }
-                    invoice_records.append(invoice_record)
+                    invoice_records.append(
+                        invoice_record
+                    )
+
+                    claimed_records[
+                        document.transaction_id
+                    ] = invoice_record
+
                 except Exception as e:
                     await operation_progress.failed(
                         document.transaction_id,
                         filename=get_original_filename(document.transaction_id),
                         error=str(e),
                     )
-                    await self._log(f"❌ Failed to process invoice for file {document.transaction_id}: {str(e)}",
-                                    "error")
+
+                    await release_preparation_claim(
+                        document
+                    )
+
+                    await self._log(
+                        f"❌ Failed to process invoice for file {document.transaction_id}: {str(e)}",
+                        "error",
+                    )
 
             if document_payload_bulk:
-                claimed_payloads = []
-                claimed_documents = []
-                claimed_invoice_records = []
-
-                for (
-                    candidate_payload,
-                    document,
-                    invoice_record,
-                ) in zip(
-                    document_payload_bulk,
-                    prepared_documents,
-                    invoice_records,
-                ):
-                    # Historical sends may still exist only under the
-                    # old "invoicess" owner. Recheck directly before
-                    # claiming the corrected canonical namespace.
-                    legacy_exists = False
-                    if legacy_record_type != record_type:
-                        legacy_exists = await asyncio.to_thread(
-                            self.repo.record_exists,
-                            legacy_record_type,
-                            document.group_id,
-                            document.transaction_id,
-                        )
-
-                    if legacy_exists:
-                        dup_msg = (
-                            f"{self.doc_type} for "
-                            f"({get_original_filename(document.transaction_id)}) "
-                            f"was already sent to Xero and was not "
-                            f"sent again."
-                        )
-                        await operation_progress.failed(
-                            document.transaction_id,
-                            filename=get_original_filename(
-                                document.transaction_id
-                            ),
-                            error=dup_msg,
-                        )
-                        await self._log(
-                            f"❌ {dup_msg}",
-                            "error",
-                        )
-                        continue
-
-                    claimed = await asyncio.to_thread(
-                        self.repo.claim_record,
-                        record_type,
-                        document.group_id,
-                        document.transaction_id,
-                        {
-                            **invoice_record,
-                            "action": action,
-                            "invoiceStatus": invoice_status,
-                        },
-                    )
-
-                    if not claimed:
-                        dup_msg = (
-                            f"{self.doc_type} for "
-                            f"({get_original_filename(document.transaction_id)}) "
-                            f"was already claimed or sent to Xero and "
-                            f"was not sent again."
-                        )
-                        await operation_progress.failed(
-                            document.transaction_id,
-                            filename=get_original_filename(
-                                document.transaction_id
-                            ),
-                            error=dup_msg,
-                        )
-                        await self._log(
-                            f"❌ {dup_msg}",
-                            "error",
-                        )
-                        continue
-
-                    transaction_id = document.transaction_id
-
-                    claimed_payloads.append(
-                        candidate_payload
-                    )
-                    claimed_documents.append(document)
-                    claimed_invoice_records.append(
-                        invoice_record
-                    )
-                    claimed_records[
-                        transaction_id
-                    ] = invoice_record
-
-                document_payload_bulk = claimed_payloads
-                prepared_documents = claimed_documents
-                invoice_records = claimed_invoice_records
-
-                if not document_payload_bulk:
-                    await operation_progress.fail_remaining(
-                        "No new documents to process."
-                    )
-                    await sio.emit(
-                        "xero-invoice-progress",
-                        {"progress": 100},
-                        room=self.context.client_id,
-                    )
-                    return operation_progress.result_payload()
+                # Every prepared document already owns its durable
+                # accounting claim. No second claim is permitted here.
 
                 document_chunks = (
                     chunk_accounting_provider_documents(

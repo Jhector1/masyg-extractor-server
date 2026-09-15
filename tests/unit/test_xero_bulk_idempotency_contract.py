@@ -85,44 +85,91 @@ def test_xero_preserves_historical_invoicess_lookup():
     )
 
 
-def test_xero_bulk_claims_before_provider_request():
+def test_xero_bulk_claims_before_all_provider_mutations():
     bulk = bulk_source()
+    normalized = "".join(
+        bulk.split()
+    )
 
-    claim_pos = bulk.index(
+    claim = normalized.index(
         "self.repo.claim_record"
     )
-    request_pos = bulk.index(
-        "xero_response = await self.client.request("
+
+    customer_create = normalized.index(
+        "self.customer_service.create_customer_in_bulk("
     )
 
-    assert claim_pos < request_pos
+    item_create = normalized.index(
+        "self.item_service.create_item_in_bulk("
+    )
+
+    document_request = normalized.index(
+        "xero_response=awaitself.client.request("
+    )
+
+    assert (
+        claim
+        < customer_create
+        < item_create
+        < document_request
+    )
+
     assert (
         "provider_started_transaction_ids.update("
         in bulk
     )
+
     assert (
         "provider_request_started"
         not in bulk
     )
 
 
-def test_xero_bulk_sends_only_owned_claims():
+def test_xero_bulk_only_prepares_owned_documents():
     bulk = bulk_source()
+    normalized = "".join(
+        bulk.split()
+    )
 
-    assert "claimed_payloads" in bulk
-    assert "claimed_documents" in bulk
-    assert "claimed_invoice_records" in bulk
+    claim = normalized.index(
+        "self.repo.claim_record"
+    )
+
+    owned_append = normalized.index(
+        "claimed_documents.append(document)",
+        claim,
+    )
+
+    customer_map = normalized.index(
+        "customers_map[key]=document.customer",
+        owned_append,
+    )
+
+    item_map = normalized.index(
+        "items_map[key]=document.items",
+        owned_append,
+    )
+
+    customer_create = normalized.index(
+        "self.customer_service.create_customer_in_bulk(",
+        item_map,
+    )
 
     assert (
-        "document_payload_bulk = claimed_payloads"
+        claim
+        < owned_append
+        < customer_map
+        < item_map
+        < customer_create
+    )
+
+    assert (
+        "for document in claimed_documents:"
         in bulk
     )
+
     assert (
-        "prepared_documents = claimed_documents"
-        in bulk
-    )
-    assert (
-        "invoice_records = claimed_invoice_records"
+        "claimed_records"
         in bulk
     )
 
@@ -370,3 +417,41 @@ def test_xero_exception_cleanup_uses_per_document_provider_start():
         < uncertain
         < release
     )
+
+
+def test_xero_preparation_failures_release_early_claim():
+    bulk = bulk_source()
+
+    assert (
+        "async def release_preparation_claim("
+        in bulk
+    )
+
+    helper = bulk.index(
+        "async def release_preparation_claim("
+    )
+
+    release = bulk.index(
+        "self.repo.release_record_claim",
+        helper,
+    )
+
+    document_request = bulk.index(
+        "xero_response = await self.client.request(",
+        release,
+    )
+
+    assert release < document_request
+
+    assert (
+        "await release_preparation_claim("
+        in bulk
+    )
+
+
+def test_xero_has_only_one_claim_site_in_bulk_owner():
+    bulk = bulk_source()
+
+    assert bulk.count(
+        "self.repo.claim_record"
+    ) == 1

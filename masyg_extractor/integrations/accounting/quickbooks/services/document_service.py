@@ -228,11 +228,22 @@ class DocumentService:
         settled_bids: set[str] = set()
         provider_started_bids: set[str] = set()
 
+        # The durable accounting claim is the final TOCTOU barrier
+        # before *any* QuickBooks mutation, including auxiliary
+        # Customer and Item creation.
+        record_type = f"{self.doc_type.lower()}s"
+        action = (
+            "create_sales_receipt"
+            if self.doc_type.lower() == "salesreceipt"
+            else "create_ar_invoice"
+        )
+
         try:
             document_payload_bulk: List[Dict[str, Any]] = []
             invoice_records: Dict[str, Dict[str, Any]] = {}
             customers_map: Dict[str, Customer] = {}
             items_map: Dict[str, List[Item]] = {}
+            claimed_documents: List[Document] = []
             existing_documents = 0
 
             for document in documents:
@@ -268,11 +279,78 @@ class DocumentService:
                     )
                     continue
 
-                key = safe_uuid_key(document.transaction_id)
+                bid = generate_sku(
+                    document.transaction_id
+                )
+
+                provisional_record = {
+                    "group_id": document.group_id,
+                    "transactionId":
+                        document.transaction_id,
+                    "integration": "quickbooks",
+                    "transactionType": self.doc_type,
+                    "date": document.date,
+                    "bId": bid,
+                    "amount": sum(
+                        float(item.quantity or 0)
+                        * float(item.unit_price or 0)
+                        for item in document.items
+                    ),
+                    "metadata": {
+                        "syncToken": "0"
+                    },
+                    "action": action,
+                }
+
+                claimed = await asyncio.to_thread(
+                    self.repo.claim_record,
+                    record_type,
+                    document.group_id,
+                    document.transaction_id,
+                    provisional_record,
+                )
+
+                if not claimed:
+                    dup_msg = (
+                        f"{self.doc_type} for "
+                        f"({get_original_filename(document.transaction_id)}) "
+                        f"was already claimed or sent to "
+                        f"{self.repo.integration} and was not sent again."
+                    )
+
+                    await self._log(
+                        f"❌ {dup_msg}",
+                        "error",
+                    )
+
+                    await operation_progress.failed(
+                        document.transaction_id,
+                        filename=get_original_filename(
+                            document.transaction_id
+                        ),
+                        error=dup_msg,
+                    )
+
+                    continue
+
+                claimed_invoice_records[
+                    bid
+                ] = provisional_record
+
+                claimed_documents.append(
+                    document
+                )
+
+                key = safe_uuid_key(
+                    document.transaction_id
+                )
+
+                # Only owned documents may reach auxiliary
+                # provider mutation preparation.
                 customers_map[key] = document.customer
                 items_map[key] = document.items
 
-            if len(documents) == existing_documents:
+            if not claimed_documents:
                 return operation_progress.result_payload()
 
             # Bulk create customers and items (bucketed)
@@ -288,10 +366,33 @@ class DocumentService:
             customers_created = DocumentService.merge_buckets(split_customers)
             items_created = DocumentService.merge_buckets(split_items)
 
-            # Build payloads per document
-            for document in documents:
+            async def release_preparation_claim(
+                document: Document,
+                bid: str,
+            ) -> None:
+                if (
+                    bid in settled_bids
+                    or bid not in claimed_invoice_records
+                ):
+                    return
+
+                await asyncio.to_thread(
+                    self.repo.release_record_claim,
+                    record_type,
+                    document.group_id,
+                    document.transaction_id,
+                )
+
+                settled_bids.add(bid)
+
+            # Build payloads only for documents that successfully
+            # acquired the durable claim above.
+            for document in claimed_documents:
                 try:
                     key = safe_uuid_key(document.transaction_id)
+                    bid = generate_sku(
+                        document.transaction_id
+                    )
                     reference_items = items_created.get(key) or []
                     if not reference_items:
                         await self._log(
@@ -302,6 +403,12 @@ class DocumentService:
                             filename=get_original_filename(document.transaction_id),
                             error="Items could not be prepared.",
                         )
+
+                        await release_preparation_claim(
+                            document,
+                            bid,
+                        )
+
                         continue
 
                     line_items = []
@@ -340,6 +447,12 @@ class DocumentService:
                             filename=get_original_filename(document.transaction_id),
                             error="No valid line items could be prepared.",
                         )
+
+                        await release_preparation_claim(
+                            document,
+                            bid,
+                        )
+
                         continue
 
                     valid_customer = customers_created.get(key) or None
@@ -352,11 +465,18 @@ class DocumentService:
                             filename=get_original_filename(document.transaction_id),
                             error="Customer could not be created.",
                         )
+
+                        await release_preparation_claim(
+                            document,
+                            bid,
+                        )
+
                         continue
 
                     valid_customer_id = valid_customer.id
-                    doc_number = generate_doc_number(self.doc_number_prefix)
-                    bid = generate_sku(document.transaction_id)
+                    doc_number = generate_doc_number(
+                        self.doc_number_prefix
+                    )
 
                     payload = {
                         self.doc_type: {
@@ -400,59 +520,20 @@ class DocumentService:
                         filename=get_original_filename(document.transaction_id),
                         error=str(e),
                     )
+
+                    await release_preparation_claim(
+                        document,
+                        generate_sku(
+                            document.transaction_id
+                        ),
+                    )
+
                     await self._log(
                         f"❌ Failed to process invoice for file {document.transaction_id}: {str(e)}", "error"
                     )
 
-            record_type = f"{self.doc_type.lower()}s"
-            claimed_payloads: List[Dict[str, Any]] = []
-
-            for candidate_payload in document_payload_bulk:
-                bid = candidate_payload.get("bId")
-                inv = invoice_records.get(bid)
-
-                if not bid or not inv:
-                    continue
-
-                action = (
-                    "create_sales_receipt"
-                    if self.doc_type.lower() == "salesreceipt"
-                    else "create_ar_invoice"
-                )
-
-                claimed = await asyncio.to_thread(
-                    self.repo.claim_record,
-                    record_type,
-                    inv["group_id"],
-                    inv["transactionId"],
-                    {
-                        **inv,
-                        "action": action,
-                    },
-                )
-
-                if not claimed:
-                    dup_msg = (
-                        f"{self.doc_type} for "
-                        f"({get_original_filename(inv['transactionId'])}) "
-                        f"was already claimed or sent to "
-                        f"{self.repo.integration} and was not sent again."
-                    )
-                    await self._log(f"❌ {dup_msg}", "error")
-                    await operation_progress.failed(
-                        inv["transactionId"],
-                        filename=get_original_filename(
-                            inv["transactionId"]
-                        ),
-                        error=dup_msg,
-                    )
-                    continue
-
-                claimed_payloads.append(candidate_payload)
-                claimed_invoice_records[bid] = inv
-
-            document_payload_bulk = claimed_payloads
-            invoice_records = claimed_invoice_records
+            # Every prepared payload already owns its durable
+            # accounting claim. Do not perform a second claim here.
 
             if not document_payload_bulk:
                 await operation_progress.fail_remaining("No valid documents were processed.")
