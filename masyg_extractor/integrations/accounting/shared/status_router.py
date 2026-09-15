@@ -34,6 +34,9 @@ from masyg_extractor.integrations.accounting.shared.document_materializer import
 from masyg_extractor.integrations.accounting.shared.execution_bridge import (
     build_accounting_execution_bridge,
 )
+from masyg_extractor.integrations.accounting.shared.execution_result import (
+    summarize_accounting_provider_result,
+)
 from masyg_extractor.services.firestore_helpers import (
     document_get,
     get_firestore_client,
@@ -639,19 +642,38 @@ async def post_accounting_execution(
             )
             continue
 
-        executions.append(
-            {
-                "provider": provider,
-                "accounting_intent": (
-                    accounting_intent
-                ),
-                "status": "completed",
-                "documents": (
-                    dispatched_identities
-                ),
-                "result": provider_result,
-            }
+        execution_entry = {
+            "provider": provider,
+            "accounting_intent": (
+                accounting_intent
+            ),
+            # `completed` means the provider-service call returned.
+            # Per-document provider success/failure is represented
+            # separately by the verified `outcome` summary below.
+            "status": "completed",
+            "documents": (
+                dispatched_identities
+            ),
+            "result": provider_result,
+        }
+
+        provider_outcome = (
+            summarize_accounting_provider_result(
+                provider_result,
+                dispatched_identities,
+            )
         )
+
+        # Preserve compatibility with older/non-canonical provider
+        # result shapes while never inventing successful counts.
+        # Current QuickBooks/Xero bulk owners return the canonical
+        # AccountingOperationProgress result envelope.
+        if provider_outcome is not None:
+            execution_entry["outcome"] = (
+                provider_outcome
+            )
+
+        executions.append(execution_entry)
 
     return {
         "provider": provider,
