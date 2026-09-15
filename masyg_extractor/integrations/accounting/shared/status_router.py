@@ -9,6 +9,7 @@ from masyg_extractor.config.jwt_config import (
     get_current_user_from_cookie,
 )
 from masyg_extractor.integrations.accounting.registry import (
+    get_accounting_execution_action,
     get_accounting_provider,
 )
 from masyg_extractor.integrations.accounting.shared.batch_preflight import (
@@ -36,6 +37,9 @@ from masyg_extractor.integrations.accounting.shared.execution_bridge import (
 )
 from masyg_extractor.integrations.accounting.shared.execution_result import (
     summarize_accounting_provider_result,
+)
+from masyg_extractor.integrations.accounting.shared.reconciliation_service import (
+    verify_accounting_status,
 )
 from masyg_extractor.services.firestore_helpers import (
     document_get,
@@ -685,6 +689,225 @@ async def post_accounting_execution(
         # fresh preflight while reloading/materializing the sources.
         "runtime_blocked": runtime_blocked,
         "executions": executions,
+    }
+
+
+@router.post("/verify-status")
+async def post_accounting_verify_status(
+    request: Request,
+    payload: dict[str, Any],
+    current_user: dict = Depends(
+        get_current_user_from_cookie
+    ),
+):
+    """
+    Explicitly verify one duplicate-blocked accounting operation.
+
+    The browser may select the integration provider and identify the
+    source document. Accounting meaning remains server-owned.
+
+    Accepted request fields:
+      - provider
+      - group_id
+      - file_id
+
+    The client cannot provide accounting intent, provider action,
+    record type, durable status, recovery state, or provider document
+    identity.
+    """
+
+    user_id = str(
+        current_user.get("userId") or ""
+    ).strip()
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="User not authenticated.",
+        )
+
+    allowed_fields = {
+        "provider",
+        "group_id",
+        "file_id",
+    }
+
+    unexpected_fields = (
+        set(payload)
+        - allowed_fields
+    )
+
+    if unexpected_fields:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Verify Status accepts only "
+                "provider, group_id, and file_id."
+            ),
+        )
+
+    provider = str(
+        payload.get("provider") or ""
+    ).strip().lower()
+
+    group_id = str(
+        payload.get("group_id") or ""
+    ).strip()
+
+    file_id = str(
+        payload.get("file_id") or ""
+    ).strip()
+
+    if not provider:
+        raise HTTPException(
+            status_code=400,
+            detail="provider is required.",
+        )
+
+    if not group_id or not file_id:
+        raise HTTPException(
+            status_code=400,
+            detail="group_id and file_id are required.",
+        )
+
+    try:
+        get_accounting_provider(
+            provider
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported accounting provider.",
+        ) from exc
+
+    # Reuse the existing authenticated ownership + canonical handoff
+    # route owner. The client cannot provide accounting intent.
+    handoff = (
+        await get_accounting_document_handoff(
+            group_id=group_id,
+            file_id=file_id,
+            current_user=current_user,
+        )
+    )
+
+    if (
+        handoff.get("group_id") != group_id
+        or handoff.get("file_id") != file_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Canonical accounting document "
+                "identity changed."
+            ),
+        )
+
+    accounting_intent = str(
+        handoff.get(
+            "accounting_intent"
+        )
+        or ""
+    ).strip()
+
+    if not accounting_intent:
+        return {
+            "provider": provider,
+            "group_id": group_id,
+            "file_id": file_id,
+            "disposition": "not_eligible",
+            "lookup_outcome": None,
+            "reconciled": False,
+            "durable_status": None,
+        }
+
+    # Provider selection is validated against the canonical execution
+    # capability registry using the SERVER-DERIVED accounting intent.
+    try:
+        get_accounting_execution_action(
+            provider,
+            accounting_intent,
+        )
+    except KeyError:
+        return {
+            "provider": provider,
+            "group_id": group_id,
+            "file_id": file_id,
+            "disposition": "not_eligible",
+            "lookup_outcome": None,
+            "reconciled": False,
+            "durable_status": None,
+        }
+
+    # Reuse the exact runtime owner already used by execution. Merely
+    # constructing the bridge performs no provider document write.
+    try:
+        bridge = (
+            build_accounting_execution_bridge(
+                request=request,
+                user_id=user_id,
+                provider=provider,
+                accounting_intent=(
+                    accounting_intent
+                ),
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    service = getattr(
+        bridge,
+        "service",
+        None,
+    )
+
+    repo = getattr(
+        service,
+        "repo",
+        None,
+    )
+
+    provider_client = getattr(
+        service,
+        "client",
+        None,
+    )
+
+    if (
+        repo is None
+        or provider_client is None
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Accounting verification runtime "
+                "is unavailable."
+            ),
+        )
+
+    result = await verify_accounting_status(
+        provider=provider,
+        intent=accounting_intent,
+        group_id=group_id,
+        file_id=file_id,
+        repo=repo,
+        client=provider_client,
+    )
+
+    return {
+        "provider": provider,
+        "group_id": group_id,
+        "file_id": file_id,
+        "disposition":
+            result.disposition,
+        "lookup_outcome":
+            result.lookup_outcome,
+        "reconciled":
+            result.reconciled,
+        "durable_status":
+            result.durable_status,
     }
 
 

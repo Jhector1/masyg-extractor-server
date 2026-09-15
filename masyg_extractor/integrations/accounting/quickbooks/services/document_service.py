@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 import itertools
 import json
 from typing import List, Dict, Any, Iterable, Optional
@@ -225,6 +226,7 @@ class DocumentService:
         )
 
         claimed_invoice_records: Dict[str, Dict[str, Any]] = {}
+        claim_tokens_by_bid: Dict[str, str] = {}
         settled_bids: set[str] = set()
         provider_started_bids: set[str] = set()
 
@@ -302,13 +304,16 @@ class DocumentService:
                     "action": action,
                 }
 
+                claim_token = uuid.uuid4().hex
+
                 claimed = await asyncio.to_thread(
                     self.repo.claim_record,
                     record_type,
                     document.group_id,
                     document.transaction_id,
                     provisional_record,
-                )
+
+                    claim_token=claim_token,)
 
                 if not claimed:
                     dup_msg = (
@@ -332,6 +337,10 @@ class DocumentService:
                     )
 
                     continue
+
+                claim_tokens_by_bid[
+                    bid
+                ] = claim_token
 
                 claimed_invoice_records[
                     bid
@@ -381,7 +390,8 @@ class DocumentService:
                     record_type,
                     document.group_id,
                     document.transaction_id,
-                )
+
+                    claim_token=claim_tokens_by_bid[bid],)
 
                 settled_bids.add(bid)
 
@@ -477,6 +487,23 @@ class DocumentService:
                     doc_number = generate_doc_number(
                         self.doc_number_prefix
                     )
+
+                    dispatch_identity_prepared = (
+                        await asyncio.to_thread(
+                            self.repo.prepare_provider_dispatch,
+                            record_type,
+                            document.group_id,
+                            document.transaction_id,
+                            provider_document_number=doc_number,
+
+                            claim_token=claim_tokens_by_bid[bid],)
+                    )
+
+                    if not dispatch_identity_prepared:
+                        raise RuntimeError(
+                            "QuickBooks durable dispatch identity "
+                            "could not be persisted."
+                        )
 
                     payload = {
                         self.doc_type: {
@@ -645,6 +672,26 @@ class DocumentService:
 
                 # From this point forward the provider outcome may be
                 # ambiguous for exactly these documents.
+                for (
+                    dispatch_bid,
+                    dispatch_record,
+                ) in chunk_invoice_records.items():
+                    dispatch_started = (
+                        await asyncio.to_thread(
+                            self.repo.mark_provider_dispatch_started,
+                            record_type,
+                            dispatch_record["group_id"],
+                            dispatch_record["transactionId"],
+
+                            claim_token=claim_tokens_by_bid[dispatch_bid],)
+                    )
+
+                    if not dispatch_started:
+                        raise RuntimeError(
+                            "QuickBooks durable provider dispatch "
+                            "marker could not be persisted."
+                        )
+
                 provider_started_bids.update(
                     chunk_invoice_records.keys()
                 )
@@ -683,7 +730,8 @@ class DocumentService:
                             inv["group_id"],
                             inv["transactionId"],
                             error=provider_error,
-                        )
+
+                            claim_token=claim_tokens_by_bid[bid],)
                         settled_bids.add(bid)
 
                     # Later chunks have not reached QuickBooks.
@@ -711,7 +759,8 @@ class DocumentService:
                             pending_inv[
                                 "transactionId"
                             ],
-                        )
+
+                            claim_token=claim_tokens_by_bid[pending_bid],)
 
                         settled_bids.add(
                             pending_bid
@@ -829,7 +878,8 @@ class DocumentService:
                             inv[
                                 "transactionId"
                             ],
-                        )
+
+                            claim_token=claim_tokens_by_bid[bid],)
 
                         settled_bids.add(bid)
 
@@ -853,22 +903,7 @@ class DocumentService:
                             ),
                         )
 
-                        await operation_progress.succeeded(
-                            inv[
-                                "transactionId"
-                            ],
-                            filename=file,
-                            message=(
-                                "Created in QuickBooks"
-                            ),
-                        )
 
-                        await self._log(
-                            f"✅ "
-                            f"{self.doc_type.capitalize()} "
-                            f"processed successfully "
-                            f"- document: {file}"
-                        )
 
                         provider_entity = (
                             payload.get(
@@ -896,15 +931,39 @@ class DocumentService:
                                 provider_document_id
                             )
 
-                        await asyncio.to_thread(
-                            self.repo.finalize_record,
-                            record_type,
-                            inv["group_id"],
-                            inv[
-                                "transactionId"
-                            ],
-                            final_record,
-                        )
+                        finalized = await asyncio.to_thread(
+                                                    self.repo.finalize_record,
+                                                    record_type,
+                                                    inv["group_id"],
+                                                    inv[
+                                                        "transactionId"
+                                                    ],
+                                                    final_record,
+
+                                                    claim_token=claim_tokens_by_bid[bid],)
+
+                        if not finalized:
+                            raise RuntimeError(
+                                "QuickBooks durable success "
+                                "finalization lost claim ownership."
+                            )
+
+                        await operation_progress.succeeded(
+                                                    inv[
+                                                        "transactionId"
+                                                    ],
+                                                    filename=file,
+                                                    message=(
+                                                        "Created in QuickBooks"
+                                                    ),
+                                                )
+
+                        await self._log(
+                                                    f"✅ "
+                                                    f"{self.doc_type.capitalize()} "
+                                                    f"processed successfully "
+                                                    f"- document: {file}"
+                                                )
 
                         settled_bids.add(bid)
 
@@ -929,7 +988,8 @@ class DocumentService:
                             "return a result for "
                             "this document."
                         ),
-                    )
+
+                        claim_token=claim_tokens_by_bid[bid],)
 
                     settled_bids.add(bid)
 
@@ -992,14 +1052,16 @@ class DocumentService:
                             inv["group_id"],
                             inv["transactionId"],
                             error=claim_error,
-                        )
+
+                            claim_token=claim_tokens_by_bid[bid],)
                     else:
                         await asyncio.to_thread(
                             self.repo.release_record_claim,
                             f"{self.doc_type.lower()}s",
                             inv["group_id"],
                             inv["transactionId"],
-                        )
+
+                            claim_token=claim_tokens_by_bid[bid],)
                 except Exception as cleanup_error:
                     logger.error(
                         "Failed to settle QuickBooks accounting claim "

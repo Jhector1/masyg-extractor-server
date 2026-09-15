@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from pprint import pprint
 from typing import List, Dict, Any
 
@@ -186,6 +187,7 @@ class DocumentService:
         )
 
         claimed_records: Dict[str, Dict[str, Any]] = {}
+        claim_tokens_by_transaction_id: Dict[str, str] = {}
         settled_transaction_ids: set[str] = set()
         provider_started_transaction_ids: set[str] = set()
 
@@ -280,13 +282,16 @@ class DocumentService:
                     "invoiceStatus": invoice_status,
                 }
 
+                claim_token = uuid.uuid4().hex
+
                 claimed = await asyncio.to_thread(
                     self.repo.claim_record,
                     record_type,
                     document.group_id,
                     document.transaction_id,
                     provisional_record,
-                )
+
+                    claim_token=claim_token,)
 
                 if not claimed:
                     dup_msg = (
@@ -310,6 +315,10 @@ class DocumentService:
                     )
 
                     continue
+
+                claim_tokens_by_transaction_id[
+                    document.transaction_id
+                ] = claim_token
 
                 claimed_records[
                     document.transaction_id
@@ -364,7 +373,8 @@ class DocumentService:
                     record_type,
                     document.group_id,
                     transaction_id,
-                )
+
+                    claim_token=claim_tokens_by_transaction_id[transaction_id],)
 
                 settled_transaction_ids.add(
                     transaction_id
@@ -420,6 +430,24 @@ class DocumentService:
                         continue
                     valid_customer_id = valid_customer.id
                     doc_number = generate_doc_number(self.doc_number_prefix)
+
+                    dispatch_identity_prepared = (
+                        await asyncio.to_thread(
+                            self.repo.prepare_provider_dispatch,
+                            record_type,
+                            document.group_id,
+                            document.transaction_id,
+                            provider_document_number=doc_number,
+
+                            claim_token=claim_tokens_by_transaction_id[document.transaction_id],)
+                    )
+
+                    if not dispatch_identity_prepared:
+                        raise RuntimeError(
+                            "Xero durable dispatch identity "
+                            "could not be persisted."
+                        )
+
                     payload = {
                         "Type": invoice_status,
                         "Contact": {"ContactID": valid_customer_id},
@@ -537,6 +565,23 @@ class DocumentService:
                     # From this boundary forward, only documents in
                     # this chunk have an ambiguous provider outcome if
                     # transport/execution fails.
+                    for dispatch_record in chunk_invoice_records:
+                        dispatch_started = (
+                            await asyncio.to_thread(
+                                self.repo.mark_provider_dispatch_started,
+                                record_type,
+                                dispatch_record["group_id"],
+                                dispatch_record["transactionId"],
+
+                                claim_token=claim_tokens_by_transaction_id[dispatch_record["transactionId"]],)
+                        )
+
+                        if not dispatch_started:
+                            raise RuntimeError(
+                                "Xero durable provider dispatch "
+                                "marker could not be persisted."
+                            )
+
                     provider_started_transaction_ids.update(
                         chunk_transaction_ids
                     )
@@ -660,14 +705,16 @@ class DocumentService:
                                     document.group_id,
                                     document.transaction_id,
                                     error=error_message,
-                                )
+
+                                    claim_token=claim_tokens_by_transaction_id[document.transaction_id],)
                             else:
                                 await asyncio.to_thread(
                                     self.repo.release_record_claim,
                                     record_type,
                                     document.group_id,
                                     document.transaction_id,
-                                )
+
+                                    claim_token=claim_tokens_by_transaction_id[document.transaction_id],)
 
                             settled_transaction_ids.add(
                                 document.transaction_id
@@ -708,7 +755,8 @@ class DocumentService:
                                 record_type,
                                 pending_group_id,
                                 pending_transaction_id,
-                            )
+
+                                claim_token=claim_tokens_by_transaction_id[pending_transaction_id],)
 
                             settled_transaction_ids.add(
                                 pending_transaction_id
@@ -783,7 +831,8 @@ class DocumentService:
                                 record_type,
                                 document.group_id,
                                 document.transaction_id,
-                            )
+
+                                claim_token=claim_tokens_by_transaction_id[document.transaction_id],)
 
                             settled_transaction_ids.add(
                                 document.transaction_id
@@ -856,13 +905,20 @@ class DocumentService:
                                 provider_document_number
                             )
 
-                        await asyncio.to_thread(
-                            self.repo.finalize_record,
-                            record_type,
-                            document.group_id,
-                            document.transaction_id,
-                            final_record,
-                        )
+                        finalized = await asyncio.to_thread(
+                                                    self.repo.finalize_record,
+                                                    record_type,
+                                                    document.group_id,
+                                                    document.transaction_id,
+                                                    final_record,
+
+                                                    claim_token=claim_tokens_by_transaction_id[document.transaction_id],)
+
+                        if not finalized:
+                            raise RuntimeError(
+                                "Xero durable success "
+                                "finalization lost claim ownership."
+                            )
 
                         settled_transaction_ids.add(
                             document.transaction_id
@@ -908,7 +964,8 @@ class DocumentService:
                             document.group_id,
                             document.transaction_id,
                             error=missing_result_error,
-                        )
+
+                            claim_token=claim_tokens_by_transaction_id[document.transaction_id],)
 
                         settled_transaction_ids.add(
                             document.transaction_id
@@ -972,14 +1029,16 @@ class DocumentService:
                             group_id,
                             transaction_id,
                             error=error_message,
-                        )
+
+                            claim_token=claim_tokens_by_transaction_id[transaction_id],)
                     else:
                         await asyncio.to_thread(
                             self.repo.release_record_claim,
                             record_type,
                             group_id,
                             transaction_id,
-                        )
+
+                            claim_token=claim_tokens_by_transaction_id[transaction_id],)
                 except Exception as cleanup_error:
                     logger.error(
                         "Failed to settle Xero accounting claim "
