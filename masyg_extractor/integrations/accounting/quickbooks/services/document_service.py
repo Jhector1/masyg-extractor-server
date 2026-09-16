@@ -227,6 +227,7 @@ class DocumentService:
 
         claimed_invoice_records: Dict[str, Dict[str, Any]] = {}
         claim_tokens_by_bid: Dict[str, str] = {}
+        bids_by_transaction_id: Dict[str, str] = {}
         settled_bids: set[str] = set()
         provider_started_bids: set[str] = set()
 
@@ -342,6 +343,10 @@ class DocumentService:
                     bid
                 ] = claim_token
 
+                bids_by_transaction_id[
+                    document.transaction_id
+                ] = bid
+
                 claimed_invoice_records[
                     bid
                 ] = provisional_record
@@ -398,11 +403,12 @@ class DocumentService:
             # Build payloads only for documents that successfully
             # acquired the durable claim above.
             for document in claimed_documents:
+                bid = bids_by_transaction_id[
+                    document.transaction_id
+                ]
+
                 try:
                     key = safe_uuid_key(document.transaction_id)
-                    bid = generate_sku(
-                        document.transaction_id
-                    )
                     reference_items = items_created.get(key) or []
                     if not reference_items:
                         await self._log(
@@ -550,9 +556,7 @@ class DocumentService:
 
                     await release_preparation_claim(
                         document,
-                        generate_sku(
-                            document.transaction_id
-                        ),
+                        bid,
                     )
 
                     await self._log(
