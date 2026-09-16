@@ -48,10 +48,15 @@ qb_auth_helper = AuthHelper(
 )
 
 @router.get("/login")
-async def login(current_user: dict = Depends(get_current_user_from_cookie),
-                ):
+async def login(
+    request: Request,
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
     user_id = current_user.get("userId")
-    return await qb_auth_helper.login(user_id)
+    return await qb_auth_helper.login(
+        user_id,
+        return_to=request.query_params.get("return_to"),
+    )
     # if not user_id:
     #     raise HTTPException(status_code=401, detail="User ID missing in token payload")
     #

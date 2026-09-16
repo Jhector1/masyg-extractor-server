@@ -44,10 +44,15 @@ xero_auth_helper = AuthHelper(
     expires_param="expires_in"        # The expiry parameter name.
 )
 @router.get("/login")
-async def login(current_user: dict = Depends(get_current_user_from_cookie),
-                ):
+async def login(
+    request: Request,
+    current_user: dict = Depends(get_current_user_from_cookie),
+):
     user_id = current_user.get("userId")
-    return await xero_auth_helper.login(user_id)
+    return await xero_auth_helper.login(
+        user_id,
+        return_to=request.query_params.get("return_to"),
+    )
     # auth_url = (
     #     f"{XERO_AUTH_URL}"
     #     f"?response_type=code"

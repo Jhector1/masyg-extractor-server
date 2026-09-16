@@ -1,6 +1,7 @@
 
 
 import os
+import json
 import base64
 import requests
 from datetime import datetime, timedelta
@@ -8,6 +9,7 @@ from fastapi import Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from cryptography.fernet import Fernet
 from masyg_extractor.integrations.accounting.shared.oauth_state import encrypt_state, decrypt_state
+from masyg_extractor.integrations.accounting.shared.oauth_return import sanitize_accounting_return_to
 
 # Import your Firestore service for QuickBooks.
 from masyg_extractor.integrations.accounting.shared.token_repository import IntegrationTokenRepository
@@ -49,9 +51,26 @@ class AuthHelper:
         basic = base64.b64encode(f"{self.CLIENT_ID}:{self.CLIENT_SECRET}".encode()).decode()
         return {"Authorization": f"Basic {basic}"}
 
-    async def login(self, user_id: str):
-        # Encrypt the user ID into state to later validate callback.
-        state = encrypt_state(user_id)
+    async def login(
+        self,
+        user_id: str,
+        return_to: str | None = None,
+    ):
+        safe_return_to = sanitize_accounting_return_to(
+            self.integration,
+            return_to,
+        )
+
+        state = encrypt_state(
+            json.dumps(
+                {
+                    "v": 1,
+                    "user_id": user_id,
+                    "return_to": safe_return_to,
+                },
+                separators=(",", ":"),
+            )
+        )
         auth_url = (
             f"{self.AUTH_URL}"
             f"?client_id={self.CLIENT_ID}"
@@ -114,7 +133,33 @@ class AuthHelper:
                 {"error": "Failed to obtain tokens.", "details": response_json},
                 status_code=status.HTTP_400_BAD_REQUEST
             )
-        user_id = decrypt_state(state)
+        decrypted_state = decrypt_state(state)
+
+        # Backward compatible with OAuth flows started before
+        # return-path context was added.
+        try:
+            state_payload = json.loads(decrypted_state)
+        except (json.JSONDecodeError, TypeError):
+            state_payload = None
+
+        if (
+            isinstance(state_payload, dict)
+            and isinstance(
+                state_payload.get("user_id"),
+                str,
+            )
+        ):
+            user_id = state_payload["user_id"]
+            return_to = sanitize_accounting_return_to(
+                self.integration,
+                state_payload.get("return_to"),
+            )
+        else:
+            user_id = decrypted_state
+            return_to = sanitize_accounting_return_to(
+                self.integration,
+                None,
+            )
 
 
         if self.integration == "xero":
@@ -135,7 +180,9 @@ class AuthHelper:
         #     # Extend or override this block for other integrations.
         #     pass
 
-        return RedirectResponse(f"{self.CLIENT_URL}/data/shore/{self.integration}")
+        return RedirectResponse(
+            f"{self.CLIENT_URL.rstrip('/')}{return_to}"
+        )
 
     async def refresh_token(self, user_id: str):
         # if self.integration == "quickbooks":
