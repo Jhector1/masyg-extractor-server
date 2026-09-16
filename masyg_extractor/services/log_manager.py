@@ -21,7 +21,10 @@ class LogManager:
         async with self.log_lock:
             self.log_queue.append((message, user_room))
         await sio.emit(log_key, {'data': message}, namespace='/', room=user_room)
-        logger.info(f"Queued log: {message} (room={user_room})")
+        # Socket.IO owns the user-facing message. Keep local
+        # observability metadata-only so customer/file content is not
+        # echoed into application logs.
+        logger.debug("Queued Socket.IO log event")
 
     async def clear_queue(self):
         """

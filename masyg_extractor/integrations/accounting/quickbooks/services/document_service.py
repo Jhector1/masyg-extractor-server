@@ -106,14 +106,18 @@ class DocumentService:
 
     async def _log(self, message: str, level: str = "info") -> None:
         try:
-            (logger.error if level.lower() == "error" else logger.info)(message)
             await self.context.log_manager.send_log(
                 message,
                 log_key="invoice-log-message",  # keep existing channel for now
                 user_room=self.context.client_id,
             )
         except Exception as e:
-            logger.error(f"Failed to send log: {message}. Error: {str(e)}")
+            logger.error(
+                "Failed to emit QuickBooks %s user-facing log event "
+                "error_type=%s",
+                self.doc_type,
+                type(e).__name__,
+            )
 
     async def _record_exists(self, group_id: str, transaction_id: str) -> bool:
         try:

@@ -97,21 +97,22 @@ class DocumentService:
 
     async def _log(self, message: str, level: str = "info") -> None:
         """
-        A helper method for logging messages asynchronously.
+        Emit a user-facing Socket.IO message without echoing its
+        business content into application logs.
         """
         try:
-            if level.lower() == "error":
-                logger.error(message)
-            else:
-                logger.info(message)
             await self.context.log_manager.send_log(
                 message,
                 log_key=f"{self.doc_type.lower()}-log-message",
                 user_room=self.context.client_id
             )
         except Exception as e:
-            # Fallback logging if asynchronous log fails.
-            logger.error(f"Failed to send log: {message}. Error: {str(e)}")
+            logger.error(
+                "Failed to emit Xero %s user-facing log event "
+                "error_type=%s",
+                self.doc_type,
+                type(e).__name__,
+            )
 
     async def _record_exists(self, group_id: str, transaction_id: str) -> bool:
         """

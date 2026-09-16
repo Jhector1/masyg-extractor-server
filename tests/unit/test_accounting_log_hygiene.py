@@ -97,3 +97,89 @@ def test_entity_helper_errors_do_not_embed_full_provider_responses():
 
     assert "{resp}" not in quickbooks
     assert "{response}" not in xero
+
+
+
+def test_log_manager_does_not_echo_socket_content_to_local_logs():
+    source = (
+        ROOT / "masyg_extractor/services/log_manager.py"
+    ).read_text()
+
+    assert "Queued log: {message}" not in source
+    assert 'logger.debug("Queued Socket.IO log event")' in source
+
+
+def test_accounting_document_log_helpers_do_not_echo_user_messages_locally():
+    quickbooks = (
+        ROOT
+        / "masyg_extractor/integrations/accounting/quickbooks/"
+        "services/document_service.py"
+    ).read_text()
+
+    xero = (
+        ROOT
+        / "masyg_extractor/integrations/accounting/xero/"
+        "services/document_service.py"
+    ).read_text()
+
+    for source in (quickbooks, xero):
+        assert "logger.info(message)" not in source
+        assert "logger.error(message)" not in source
+        assert "Failed to send log: {message}" not in source
+        assert "self.context.log_manager.send_log(" in source
+
+    assert (
+        '(logger.error if level.lower() == "error" else logger.info)(message)'
+        not in quickbooks
+    )
+    assert "Failed to emit QuickBooks %s user-facing log event" in quickbooks
+    assert "Failed to emit Xero %s user-facing log event" in xero
+
+
+def test_log_manager_runtime_emits_once_without_local_message_copy(monkeypatch):
+    import asyncio
+    import logging
+
+    import masyg_extractor.services.log_manager as log_manager_module
+
+    class FakeSio:
+        def __init__(self):
+            self.calls = []
+
+        async def emit(self, event, payload, **kwargs):
+            self.calls.append((event, payload, kwargs))
+
+    class Capture(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.messages = []
+
+        def emit(self, record):
+            self.messages.append(record.getMessage())
+
+    fake_sio = FakeSio()
+    monkeypatch.setattr(log_manager_module, "sio", fake_sio)
+
+    root_logger = logging.getLogger()
+    capture = Capture()
+    root_logger.addHandler(capture)
+
+    sentinel = "MASYG_LOG_MANAGER_CONTENT_SENTINEL"
+
+    try:
+        manager = log_manager_module.LogManager()
+        asyncio.run(
+            manager.send_log(
+                sentinel,
+                log_key="accounting-log-message",
+                user_room="test-room",
+            )
+        )
+    finally:
+        root_logger.removeHandler(capture)
+
+    assert len(fake_sio.calls) == 1
+    assert all(
+        sentinel not in message
+        for message in capture.messages
+    )
