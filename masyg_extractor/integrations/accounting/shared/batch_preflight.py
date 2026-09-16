@@ -11,6 +11,10 @@ from masyg_extractor.integrations.accounting.shared.durable_status import (
     read_accounting_durable_status,
 )
 
+from masyg_extractor.integrations.accounting.shared.source_validation import (
+    validate_accounting_source_document,
+)
+
 
 PREFLIGHT_STATES = (
     "ready",
@@ -46,6 +50,7 @@ def preflight_accounting_document(
     *,
     provider: str,
     handoff: Mapping[str, Any],
+    source_document: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     provider = str(provider or "").strip().lower()
@@ -153,6 +158,29 @@ def preflight_accounting_document(
             "Unexpected durable accounting status."
         )
 
+    reason = (
+        "The accounting operation needs verification "
+        "before another provider action is allowed."
+        if recovery_required
+        else None
+    )
+
+    # Durable status alone is not enough to declare a source document
+    # executable. Validate known provider-materialization requirements
+    # before exposing `ready` to an execution plan.
+    if (
+        state == "ready"
+        and source_document is not None
+    ):
+        try:
+            validate_accounting_source_document(
+                source_document,
+                accounting_intent=accounting_intent,
+            )
+        except (TypeError, ValueError) as exc:
+            state = "unavailable"
+            reason = str(exc)
+
     return {
         "provider": provider,
         "group_id": group_id,
@@ -160,12 +188,7 @@ def preflight_accounting_document(
         "document_type": document_type,
         "accounting_intent": accounting_intent,
         "state": state,
-        "reason": (
-            "The accounting operation needs verification "
-            "before another provider action is allowed."
-            if recovery_required
-            else None
-        ),
+        "reason": reason,
         "durable_status": durable_status,
     }
 

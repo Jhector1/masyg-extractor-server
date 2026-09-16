@@ -10,6 +10,7 @@ from masyg_extractor.integrations.accounting.shared.firestore_repository import 
 from masyg_extractor.integrations.accounting.quickbooks.utils import parse_int, parse_float
 from masyg_extractor.integrations.utils import format_date
 from masyg_extractor.integrations.accounting.shared.sku import generate_sku
+from masyg_extractor.integrations.accounting.shared.source_validation import require_accounting_customer_name
 from masyg_extractor.services.file_extractor_service import remove_non_alphanumeric
 from masyg_extractor.services.log_manager import LogManager
 from masyg_extractor.services.my_log import logger
@@ -24,9 +25,13 @@ def create_customer(details: Dict[str, Any], transaction_id) -> Customer:
     """
     Create a Customer object from the details dictionary.
     """
+    customer_name = require_accounting_customer_name(
+        details
+    )
+
     return Customer(
         id=details.get("customer_id") if details.get("customer_id") else None,
-        name=remove_non_alphanumeric(details.get("customer_name")),
+        name=remove_non_alphanumeric(customer_name),
         transaction_id=transaction_id
     )
 

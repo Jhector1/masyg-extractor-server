@@ -231,10 +231,15 @@ async def post_accounting_batch_preflight(
             )
             continue
 
+        source_document = (
+            snapshot.to_dict()
+            or {}
+        )
+
         try:
             handoff = (
                 resolve_accounting_document_handoff(
-                    snapshot.to_dict() or {},
+                    source_document,
                     group_id=group_id,
                     file_id=file_id,
                 )
@@ -255,6 +260,7 @@ async def post_accounting_batch_preflight(
             repo,
             provider=provider,
             handoff=handoff,
+            source_document=source_document,
         )
 
         results.append(result)
