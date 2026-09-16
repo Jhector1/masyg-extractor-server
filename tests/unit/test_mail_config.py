@@ -35,3 +35,42 @@ def test_production_refuses_disabled_smtp_cert_validation(monkeypatch):
 
     with pytest.raises(RuntimeError, match="certificate validation disabled"):
         helper.init_mail(FastAPI())
+
+
+
+def test_brevo_account_email_login_does_not_warn(monkeypatch, caplog):
+    """An account email may legitimately be the Brevo SMTP login."""
+    from fastapi import FastAPI
+
+    monkeypatch.setattr(helper, "_WARNED_BAD_BREVO_USERNAME", False)
+    monkeypatch.setenv("BREVO_USERNAME", "account@example.com")
+    monkeypatch.setenv("BREVO_PASSWORD", "smtp-key")
+    monkeypatch.setenv("MAIL_FROM", "sender@example.com")
+    monkeypatch.setenv("BREVO_SMTP", "smtp-relay.brevo.com")
+
+    with caplog.at_level("WARNING", logger="masyg.mail"):
+        helper.init_mail(FastAPI())
+
+    assert not any(
+        "BREVO_USERNAME" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_brevo_relay_host_used_as_login_warns(monkeypatch, caplog):
+    """The SMTP relay hostname must not be used as the SMTP login."""
+    from fastapi import FastAPI
+
+    monkeypatch.setattr(helper, "_WARNED_BAD_BREVO_USERNAME", False)
+    monkeypatch.setenv("BREVO_USERNAME", "smtp-relay.brevo.com")
+    monkeypatch.setenv("BREVO_PASSWORD", "smtp-key")
+    monkeypatch.setenv("MAIL_FROM", "sender@example.com")
+    monkeypatch.setenv("BREVO_SMTP", "smtp-relay.brevo.com")
+
+    with caplog.at_level("WARNING", logger="masyg.mail"):
+        helper.init_mail(FastAPI())
+
+    assert any(
+        "SMTP relay host" in record.getMessage()
+        for record in caplog.records
+    )

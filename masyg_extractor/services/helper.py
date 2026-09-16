@@ -67,17 +67,19 @@ def init_mail(app: FastAPI):
     if missing:
         logger.error("Transactional email is not fully configured; missing %s", ", ".join(missing))
 
-    # Brevo's SMTP login is a generated identifier, normally ending in
-    # @smtp-brevo.com. It is not the ordinary Brevo account email.
+    # Brevo SMTP logins can legitimately be either the Brevo account login
+    # email address or a generated address such as [ID]@smtp-brevo.com.
+    # Do not validate the login by email suffix. The relay hostname itself,
+    # however, is never the SMTP username and is a common configuration error.
     if (
         server == "smtp-relay.brevo.com"
         and username
-        and not username.endswith("@smtp-brevo.com")
+        and username.lower() == server.lower()
         and not _WARNED_BAD_BREVO_USERNAME
     ):
         logger.warning(
-            "BREVO_USERNAME does not look like a Brevo SMTP login. "
-            "Use the Login shown under Brevo Settings > SMTP & API, not the account email."
+            "BREVO_USERNAME is set to the SMTP relay host. "
+            "Use the Login shown under Brevo Settings > SMTP & API."
         )
         _WARNED_BAD_BREVO_USERNAME = True
 
