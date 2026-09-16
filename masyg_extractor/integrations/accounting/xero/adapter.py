@@ -50,10 +50,12 @@ class XeroClientAdapter(IntegrationClientAdapter):
             try:
                 method = method.upper()
                 if method == "GET":
-                    # print(params)
-                    params = payload if payload is not None else kwargs.pop("params", None)
+                    # GET payload remains a legacy compatibility override.
+                    # Otherwise preserve the explicit params argument used by
+                    # canonical reconciliation lookups.
+                    request_params = payload if payload is not None else params
 
-                    response = await client.get(url, headers=headers, params=params, **kwargs)
+                    response = await client.get(url, headers=headers, params=request_params, **kwargs)
 
                 elif method == "POST":
                     response = await client.post(url, headers=headers, json=payload, **kwargs)

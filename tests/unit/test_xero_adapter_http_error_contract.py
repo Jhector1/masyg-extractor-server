@@ -35,3 +35,15 @@ def test_xero_adapter_does_not_recreate_error_parser():
         "import _normalize_xero_http_error as normalize_xero_http_error"
     ) in adapter
     assert "def _normalize_xero_http_error" not in adapter
+
+def test_xero_adapter_preserves_explicit_get_params():
+    adapter = source(
+        "masyg_extractor/integrations/accounting/xero/adapter.py"
+    )
+
+    assert (
+        "request_params = payload if payload is not None else params"
+        in adapter
+    )
+    assert "params=request_params" in adapter
+    assert 'kwargs.pop("params"' not in adapter
