@@ -110,7 +110,7 @@ class CustomerService:
         """
         try:
             payload = self.create_single_customer_payload(customer)
-            logger.info(f"Payload for creating customer: {payload}")
+            logger.info("Creating Xero contact")
             return await self.entity_helper.create_entity("Contact", payload)
         except Exception as e:
             logger.error(f"Error creating customer '{customer.name}': {str(e)}")

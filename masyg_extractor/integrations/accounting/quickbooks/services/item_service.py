@@ -206,7 +206,7 @@ class ItemService:
         """
         try:
             payload = {"Items": [self.create_single_item_payload(item)]}
-            logger.info(f"Creating item with payload: {payload}")
+            logger.info("Creating QuickBooks item")
             return await self.entity_helper.create_entity("Item", payload)
         except Exception as e:
             logger.error(f"Error creating item '{item.name}': {str(e)}")
@@ -255,7 +255,10 @@ db.collection("users").collection(user_id).collection("audit_logs")
                     payload=None,
                 )
 
-            logger.info(f"Creating bulk items with payload: {payload}")
+            logger.info(
+                "Creating QuickBooks bulk items item_count=%d",
+                len(payload_items),
+            )
             result = await self.entity_helper.create_entity_in_bulk_and_merge_with_current(
                 local_items, entity, payload, name_key, id_key
             )

@@ -174,7 +174,7 @@ class ItemService:
         """
         try:
             payload = {"Items": [self.create_single_item_payload(item)]}
-            logger.info(f"Creating item with payload: {payload}")
+            logger.info("Creating Xero item")
             return await self.entity_helper.create_entity("Item", payload)
         except Exception as e:
             logger.error(f"Error creating item '{item.name}': {str(e)}")
@@ -207,7 +207,10 @@ class ItemService:
             payload_items = [self.create_bulk_item_payload(item) for item in non_existing_items]
             payload = {"Items": payload_items}
 
-            logger.info(f"Creating bulk items with payload: {payload}")
+            logger.info(
+                "Creating Xero bulk items item_count=%d",
+                len(payload_items),
+            )
             all_current_items = cast(
                 Dict[str, List[Item]],
                 await self.entity_helper.create_entity_in_bulk_and_merge_with_current(

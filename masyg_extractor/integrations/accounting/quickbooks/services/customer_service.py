@@ -110,7 +110,7 @@ class CustomerService:
         """
         try:
             payload = self.create_single_customer_payload(customer)
-            logger.info(f"Payload for creating customer: {payload}")
+            logger.info("Creating QuickBooks customer")
             return await self.entity_helper.create_entity("Contact", payload)
         except Exception as e:
             logger.error(f"Error creating customer '{customer.name}': {str(e)}")
@@ -247,7 +247,10 @@ class CustomerService:
                         transaction_id=None,
                     )
 
-            logger.info(f"Bulk customer creation merged payload: {all_current_customers}")
+            logger.info(
+                "QuickBooks bulk customer creation completed customer_count=%d",
+                len(all_current_customers),
+            )
             return all_current_customers
         except Exception as e:
             logger.error(f"Error in create_customer_in_bulk: {str(e)}")

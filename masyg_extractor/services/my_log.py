@@ -7,11 +7,10 @@ from masyg_extractor.utils.extensions import sio
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-if not logger.hasHandlers():
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(levelname)s:%(name)s: %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+# Handler installation belongs to the application/server logging owner.
+# Keeping this logger handler-free avoids duplicate records when Uvicorn
+# or another root/application handler is configured after import.
+logger.propagate = True
 
 log_queue = deque()
 queue_lock = Lock()
@@ -38,8 +37,8 @@ async def send_log(message: str, log_key = "log_message",user_room=None):
     #     log_queue.append((message, user_room))
     await sio.emit(log_key, {'data': message}, namespace='/', room=user_room)
 
-    # Optional local log
-    logger.info(f"Queued log: {message} (room={user_room})")
+    # Do not duplicate user-facing Socket.IO content into local logs.
+    logger.debug("Queued Socket.IO log event")
 
 
 class ClientFilter(logging.Filter):

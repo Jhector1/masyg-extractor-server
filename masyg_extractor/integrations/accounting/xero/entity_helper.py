@@ -132,7 +132,10 @@ class EntityHelper:
             payload=payload,
             method="POST",
         )
-        logger.info(f"create_{entity.lower()} response received: {response}")
+        logger.info(
+            "Xero create response received entity=%s",
+            entity,
+        )
 
         # Update progress weight explicitly if needed
         self.context.progress[f"creating_{entity.lower()}"] = self.context.progress_logger.getWeight(
@@ -160,7 +163,9 @@ class EntityHelper:
                 logger.info(f"{entity} created with ID: {new_entity_id}")
                 return new_entity_id
 
-        raise Exception(f"Unexpected response structure: {response}")
+        raise Exception(
+            f"Unexpected Xero response structure for {entity}."
+        )
 
     async def create_entity_in_bulk(
         self, entity: str, payload: Optional[Dict[str, Any]] = None
@@ -178,7 +183,15 @@ class EntityHelper:
             method="POST",
         )
 
-        logger.info(f"create_{entity.lower()} response received: {response}")
+        response_items = response.get(entity, []) if isinstance(response, dict) else []
+        if isinstance(response_items, dict):
+            response_items = [response_items]
+        response_count = len(response_items) if isinstance(response_items, list) else 0
+        logger.info(
+            "Xero bulk create response received entity=%s response_count=%d",
+            entity,
+            response_count,
+        )
         self.context.progress[f"creating_{entity.lower()}"] = self.context.progress_logger.getWeight(f"creating_{entity.lower()}")
         overall = self.context.progress_logger.calculate_overall_progress(self.context.progress)
         await self.context.progress_logger.safe_emit_progress(overall)
@@ -196,7 +209,9 @@ class EntityHelper:
         elif isinstance(entity_data, dict):
             return [entity_data]
         else:
-            raise Exception(f"Unexpected response structure: {response}")
+            raise Exception(
+            f"Unexpected Xero response structure for {entity}."
+        )
 
     async def create_entity_in_bulk_and_merge_with_current(
         self,
@@ -212,7 +227,11 @@ class EntityHelper:
         Updates the local entity's ID when the names match.
         """
 
-        logger.info(f"Merging current entities: {current_entities}")
+        logger.info(
+            "Merging Xero entities entity=%s local_count=%d",
+            entity,
+            len(current_entities),
+        )
         if len(payload.get(entity)) <= 0:
             return current_entities
         created_entities = await self.create_entity_in_bulk(entity, payload)

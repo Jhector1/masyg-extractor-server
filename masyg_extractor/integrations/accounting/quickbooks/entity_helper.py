@@ -143,19 +143,28 @@ class EntityHelper:
             payload=payload,
             method="POST",
         )
-        logger.info(f"create_{entity.lower()} response: {resp}")
+        logger.info(
+            "QuickBooks create response received entity=%s",
+            entity,
+        )
 
         if not isinstance(resp, dict):
-            raise Exception(f"Unexpected response structure: {resp}")
+            raise Exception(
+                f"Unexpected QuickBooks response structure for {entity}."
+            )
 
         obj = resp.get(entity)  # singular
         if not obj:
             # Some APIs nest further (rare); keep explicit error to surface debugging
-            raise Exception(f"Missing '{entity}' in response: {resp}")
+            raise Exception(
+                f"QuickBooks create response is missing the {entity} entity."
+            )
 
         new_id = obj.get("Id") or obj.get(f"{entity}ID")
         if not new_id:
-            raise Exception(f"No Id in '{entity}' create response: {resp}")
+            raise Exception(
+                f"QuickBooks create response for {entity} is missing Id."
+            )
 
         return str(new_id)
 
@@ -176,7 +185,12 @@ class EntityHelper:
             method="POST",
         )
 
-        logger.info(f"bulk_create {entity} response: {resp}")
+        response_count = len(resp.get("BatchItemResponse", [])) if isinstance(resp, dict) else 0
+        logger.info(
+            "QuickBooks bulk create response received entity=%s response_count=%d",
+            entity,
+            response_count,
+        )
 
         # QBO: { "BatchItemResponse": [ { "bId": "...", "Item": {...} } , ... ] }
         batch = resp.get("BatchItemResponse", [])
@@ -185,7 +199,9 @@ class EntityHelper:
         elif isinstance(batch, dict):
             return [batch]
         else:
-            raise Exception(f"Unexpected batch response: {resp}")
+            raise Exception(
+            "Unexpected QuickBooks batch response structure."
+        )
 
     # ---------------------------
     # Merge helpers
