@@ -19,6 +19,8 @@ from masyg_extractor.integrations.accounting.xero.authentication.xero_auth impor
 from masyg_extractor.services.progress_log import IntegrationsProgressLog, get_integrations_progress_logger_factory, \
     XeroIntegrationsProgressLog
 
+from masyg_extractor.integrations.accounting.shared.subscription_guard import require_active_accounting_subscription
+
 router = APIRouter(prefix="/integrations/xero")
 router.include_router(auth_router, prefix="", tags=["Xero Auth"])
 
@@ -208,7 +210,7 @@ async def send_invoice_bulk_route(
     request: Request,
     global_progress: dict = Depends(XeroIntegrationsProgressLog.get_file_progress_dict),
     progress_logger: XeroIntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("xero-invoice-progress")),
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_accounting_subscription),
 ):
     """
     Handle sending invoices to QuickBooks.
@@ -250,7 +252,7 @@ async def send_invoice_bulk_route(
     request: Request,
     global_progress: dict = Depends(XeroIntegrationsProgressLog.get_file_progress_dict),
     progress_logger: XeroIntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("xero-invoice-progress")),
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_accounting_subscription),
 ):
     """
     Handle sending invoices to QuickBooks.
@@ -331,7 +333,7 @@ async def send_invoice_route(
     request: Request,
     global_progress: dict = Depends(IntegrationsProgressLog.get_file_progress_dict),
     progress_logger: IntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("xero-invoice-log-message")),
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_accounting_subscription),
 ):
     """
     Handle sending invoices to QuickBooks.

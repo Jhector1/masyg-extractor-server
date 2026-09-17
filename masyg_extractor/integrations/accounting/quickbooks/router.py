@@ -25,6 +25,8 @@ from masyg_extractor.services.my_log import send_log, logger
 from masyg_extractor.integrations.accounting.quickbooks.authentication.quickbook_auth import router as auth_router
 from masyg_extractor.services.progress_log import IntegrationsProgressLog, get_integrations_progress_logger_factory
 
+from masyg_extractor.integrations.accounting.shared.subscription_guard import require_active_accounting_subscription
+
 router = APIRouter(prefix="/integrations/quickbooks")
 router.include_router(auth_router, prefix="", tags=["Quickbooks Auth"])
 
@@ -34,7 +36,7 @@ async def send_invoice_bulk_route(
     request: Request,
     global_progress: dict = Depends(IntegrationsProgressLog.get_file_progress_dict),
     progress_logger: IntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("quickbooks-invoice-progress")),
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_accounting_subscription),
 ):
     """
     Handle sending invoices to QuickBooks.
@@ -78,7 +80,7 @@ async def send_invoice_bulk_route(
         global_progress: dict = Depends(IntegrationsProgressLog.get_file_progress_dict),
         progress_logger: IntegrationsProgressLog = Depends(
             get_integrations_progress_logger_factory("quickbooks-invoice-progress")),
-        current_user: dict = Depends(get_current_user_from_cookie),
+        current_user: dict = Depends(require_active_accounting_subscription),
 ):
     """
     Handle sending invoices to QuickBooks.
@@ -122,7 +124,7 @@ async def send_invoice_route(
     request: Request,
     global_progress: dict = Depends(IntegrationsProgressLog.get_file_progress_dict),
     progress_logger: IntegrationsProgressLog = Depends(get_integrations_progress_logger_factory("invoice-log-message")),
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_accounting_subscription),
 ):
     """
     Handle sending invoices to QuickBooks.

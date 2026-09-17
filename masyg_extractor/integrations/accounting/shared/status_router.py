@@ -47,6 +47,8 @@ from masyg_extractor.services.firestore_helpers import (
 )
 
 
+from masyg_extractor.integrations.accounting.shared.subscription_guard import require_active_accounting_subscription
+
 router = APIRouter(
     prefix="/integrations/accounting",
 )
@@ -296,9 +298,7 @@ async def post_accounting_execution_plan(
 async def post_accounting_execution(
     request: Request,
     payload: dict[str, Any],
-    current_user: dict = Depends(
-        get_current_user_from_cookie
-    ),
+    current_user: dict = Depends(require_active_accounting_subscription),
 ):
     """
     Execute only the documents that remain canonically ready after
