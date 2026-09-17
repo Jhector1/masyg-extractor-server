@@ -6,9 +6,9 @@ import concurrent.futures
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Request, status, BackgroundTasks, Depends, Response, HTTPException
-from fastapi_mail import MessageSchema
+from fastapi_mail import MessageSchema, MessageType
 from jose import jwt, JWTError
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -57,6 +57,175 @@ ref = firestore_db.collection("users")
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
 router = APIRouter(prefix="/user")
+
+SUPPORT_TOPICS = {
+    "general": "General question",
+    "document": "Document issue",
+    "accounting": "Accounting integration",
+    "bank": "Bank connection",
+    "billing": "Billing",
+    "bug": "Bug report",
+    "other": "Other",
+}
+
+SUPPORT_EMAIL = (
+    os.getenv("SUPPORT_EMAIL")
+    or "support@masyglink.com"
+).strip()
+
+
+class SupportRequest(BaseModel):
+    topic: str = Field(
+        min_length=1,
+        max_length=32,
+    )
+    message: str = Field(
+        min_length=5,
+        max_length=4000,
+    )
+    page: str = Field(
+        default="/",
+        min_length=1,
+        max_length=2048,
+    )
+    sent_at: str | None = Field(
+        default=None,
+        max_length=64,
+    )
+
+
+@router.post("/support")
+async def submit_support_request(
+    payload: SupportRequest,
+    request: Request,
+    current_user: dict = Depends(
+        get_current_user_from_cookie
+    ),
+):
+    topic_key = payload.topic.strip().lower()
+
+    if topic_key not in SUPPORT_TOPICS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unsupported support topic",
+        )
+
+    message_text = payload.message.strip()
+
+    if len(message_text) < 5:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Support message is too short",
+        )
+
+    user_id = str(
+        current_user.get("userId") or ""
+    ).strip()
+
+    user_email = str(
+        current_user.get("email") or ""
+    ).strip()
+
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated user identity is required",
+        )
+
+    mail = getattr(
+        request.app.state,
+        "mail",
+        None,
+    )
+
+    if mail is None:
+        logger.error(
+            "Support request mail transport unavailable "
+            "user_id=%s",
+            user_id,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Support messaging is temporarily unavailable",
+        )
+
+    topic_label = SUPPORT_TOPICS[
+        topic_key
+    ]
+
+    identity = (
+        user_email
+        if user_email
+        else user_id
+    )
+
+    body = "\n".join(
+        [
+            "New MASYG support request",
+            "",
+            f"Topic: {topic_label}",
+            f"User: {identity}",
+            f"User ID: {user_id}",
+            f"Page: {payload.page}",
+            (
+                f"Client timestamp: {payload.sent_at}"
+                if payload.sent_at
+                else "Client timestamp: not supplied"
+            ),
+            "",
+            "Message:",
+            message_text,
+        ]
+    )
+
+    support_message = MessageSchema(
+        subject=(
+            f"[MASYG Support] "
+            f"{topic_label} — {identity}"
+        ),
+        recipients=[SUPPORT_EMAIL],
+        body=body,
+        subtype=MessageType.plain,
+    )
+
+    try:
+        result = await send_message_safely(
+            mail,
+            support_message,
+        )
+    except Exception as exc:
+        logger.error(
+            "Support request delivery failed "
+            "user_id=%s error_type=%s",
+            user_id,
+            type(exc).__name__,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Support messaging is temporarily unavailable",
+        ) from exc
+
+    # The canonical delivery wrapper may either return
+    # no value on success or an explicit boolean.
+    if result is False:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Support messaging is temporarily unavailable",
+        )
+
+    logger.info(
+        "Support request accepted "
+        "user_id=%s topic=%s",
+        user_id,
+        topic_key,
+    )
+
+    return {
+        "message": "Support request sent",
+    }
+
 
 # --- Helper Async Functions ---
 

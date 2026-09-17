@@ -35,7 +35,9 @@ def sanitize_accounting_return_to(
 
     allowed_paths = {
         "/integration",
+        "/data/integration",
         f"/integration/{integration}",
+        f"/data/integration/{integration}",
         fallback,
     }
 

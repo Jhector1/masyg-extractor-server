@@ -150,3 +150,45 @@ def test_active_provider_login_routes_forward_return_to():
             'return_to=request.query_params.get("return_to")'
             in provider
         )
+
+
+def test_canonical_data_integration_return_paths_are_allowed():
+    assert (
+        sanitize_accounting_return_to(
+            "quickbooks",
+            "/data/integration/quickbooks",
+        )
+        == "/data/integration/quickbooks"
+    )
+
+    assert (
+        sanitize_accounting_return_to(
+            "xero",
+            "/data/integration/xero",
+        )
+        == "/data/integration/xero"
+    )
+
+    assert (
+        sanitize_accounting_return_to(
+            "quickbooks",
+            (
+                "/data/integration/quickbooks"
+                "?source=settings#connection"
+            ),
+        )
+        == (
+            "/data/integration/quickbooks"
+            "?source=settings#connection"
+        )
+    )
+
+
+def test_cross_provider_data_integration_return_is_rejected():
+    assert (
+        sanitize_accounting_return_to(
+            "quickbooks",
+            "/data/integration/xero",
+        )
+        == "/data/shore/quickbooks"
+    )

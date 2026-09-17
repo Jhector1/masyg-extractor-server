@@ -130,7 +130,7 @@ class AuthHelper:
 
         if not access_token or not refresh_token or not expires_in:
             return JSONResponse(
-                {"error": "Failed to obtain tokens.", "details": response_json},
+                {"error": "Failed to obtain tokens.", "provider_error": response_json.get("error")},
                 status_code=status.HTTP_400_BAD_REQUEST
             )
         decrypted_state = decrypt_state(state)
@@ -235,7 +235,7 @@ class AuthHelper:
                     tenant_id=token_data.get("tenant_id"),
                 )
 
-            return JSONResponse({"message": "Token refreshed successfully.", "access_token": "new_access_token"})
+            return JSONResponse({"message": "Token refreshed successfully."})
         else:
             error = response_data.get("error")
             if error == "invalid_grant":
@@ -244,7 +244,7 @@ class AuthHelper:
                     status_code=401
                 )
             return JSONResponse(
-                {"error": "Token refresh failed.", "details": response_data},
+                {"error": "Token refresh failed.", "provider_error": response_data.get("error")},
                 status_code=400
             )
 
@@ -439,6 +439,6 @@ def get_xero_tenant_id(access_token: str):
 #                     status_code=401
 #                 )
 #             return JSONResponse(
-#                 {"error": "Token refresh failed.", "details": response_data},
+#                 {"error": "Token refresh failed.", "provider_error": response_data.get("error")},
 #                 status_code=400
 #             )

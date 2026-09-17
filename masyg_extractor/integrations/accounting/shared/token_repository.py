@@ -1,13 +1,33 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from firebase_admin import firestore
-from datetime import datetime, timedelta
+
+from masyg_extractor.integrations.accounting.shared.integration_secret_crypto import (
+    seal_token_data,
+    unseal_token_data,
+)
 from masyg_extractor.services.my_log import logger
 
 
 _FIRESTORE_DB = firestore.client()
+
+
+def _integration_document(
+    user_id: str,
+    integration: str,
+    *,
+    db: Any = None,
+):
+    firestore_db = db if db is not None else _FIRESTORE_DB
+    return (
+        firestore_db.collection("users")
+        .document(user_id)
+        .collection("integrations")
+        .document(integration)
+    )
 
 
 def get_integration_token(
@@ -16,7 +36,8 @@ def get_integration_token(
     *,
     db: Any = None,
 ) -> dict:
-    # Return tokenData for a user's named accounting integration.
+    # Runtime callers keep the historical plaintext token dictionary, but
+    # Firestore stores only encrypted provider credentials.
     firestore_db = db if db is not None else _FIRESTORE_DB
     doc_ref = (
         firestore_db.collection("users")
@@ -25,9 +46,21 @@ def get_integration_token(
         .document(integration)
     )
     doc = doc_ref.get()
-    if doc.exists:
-        return doc.to_dict().get("tokenData", {})
-    return {}
+    if not doc.exists:
+        return {}
+
+    document_data = doc.to_dict() or {}
+    token_data = document_data.get("tokenData", {})
+    if not isinstance(token_data, dict):
+        return {}
+
+    runtime_token_data, _migration_candidate = unseal_token_data(
+        user_id=user_id,
+        integration=integration,
+        token_data=token_data,
+    )
+
+    return runtime_token_data
 
 
 def store_integration_token(
@@ -40,24 +73,44 @@ def store_integration_token(
     db: Any = None,
     **kwargs,
 ) -> None:
-    # Store tokenData for a user's named accounting integration.
-    firestore_db = db if db is not None else _FIRESTORE_DB
     token_data = {
         "accessToken": access_token,
         "refreshToken": refresh_token,
         "tokenType": "Bearer",
         "expiresAt": (
-            datetime.utcnow() + timedelta(seconds=expires_in)
-        ).isoformat() + "Z",
+            datetime.utcnow()
+            + timedelta(seconds=expires_in)
+        ).isoformat()
+        + "Z",
         **kwargs,
     }
-    doc_ref = (
-        firestore_db.collection("users")
-        .document(user_id)
-        .collection("integrations")
-        .document(integration)
+
+    stored_token_data = seal_token_data(
+        user_id=user_id,
+        integration=integration,
+        token_data=token_data,
     )
-    doc_ref.set({"tokenData": token_data}, merge=True)
+
+    doc_ref = _integration_document(
+        user_id,
+        integration,
+        db=db,
+    )
+    existing = doc_ref.get()
+    if existing.exists:
+        # Updating the top-level tokenData field replaces the complete map,
+        # so legacy plaintext secret children cannot survive beside the
+        # encrypted envelope.
+        doc_ref.update(
+            {"tokenData": stored_token_data}
+        )
+    else:
+        # First-time connection: create the integration document without
+        # disturbing any future sibling fields.
+        doc_ref.set(
+            {"tokenData": stored_token_data},
+            merge=True,
+        )
 
 
 class IntegrationTokenRepository:

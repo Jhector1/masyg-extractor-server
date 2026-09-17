@@ -92,14 +92,41 @@ def init_mail(app: FastAPI):
         if bundle:
             logger.debug("SMTP TLS CA bundle configured")
 
+    mail_port = int(
+        os.getenv(
+            "BREVO_SMTP_PORT",
+            "587",
+        )
+    )
+
+    # Brevo supports STARTTLS submission on ports such as 587/2525
+    # and implicit SSL/TLS on port 465. Preserve the historical
+    # STARTTLS default unless the configured port requires implicit TLS.
+    default_ssl_tls = mail_port == 465
+
+    mail_ssl_tls = _env_flag(
+        "MAIL_SSL_TLS",
+        default=default_ssl_tls,
+    )
+
+    mail_starttls = _env_flag(
+        "MAIL_STARTTLS",
+        default=not mail_ssl_tls,
+    )
+
+    if mail_starttls and mail_ssl_tls:
+        raise RuntimeError(
+            "MAIL_STARTTLS and MAIL_SSL_TLS cannot both be enabled"
+        )
+
     config = ConnectionConfig(
         MAIL_USERNAME=username,
         MAIL_PASSWORD=password,
         MAIL_FROM=mail_from,
-        MAIL_PORT=int(os.getenv("BREVO_SMTP_PORT", "587")),
+        MAIL_PORT=mail_port,
         MAIL_SERVER=server,
-        MAIL_STARTTLS=True,
-        MAIL_SSL_TLS=False,
+        MAIL_STARTTLS=mail_starttls,
+        MAIL_SSL_TLS=mail_ssl_tls,
         USE_CREDENTIALS=True,
         VALIDATE_CERTS=validate_certs,
         TIMEOUT=int(os.getenv("MAIL_TIMEOUT_SECONDS", "15")),
