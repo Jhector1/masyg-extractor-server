@@ -28,6 +28,7 @@ class ProgressLog:
         self._last_ts: Dict[Tuple[str, str], float] = {}
         # per-file registry for computing overall
         self._registry: Dict[str, float] = {}
+        self._expected_file_count: Optional[int] = None
 
         self.client_id = client_id
         self.log_key = log_key
@@ -42,6 +43,19 @@ class ProgressLog:
         self._last.clear()
         self._last_ts.clear()
         self._registry.clear()
+        self._expected_file_count = None
+
+    def set_expected_file_count(self, count: int) -> None:
+        value = int(count)
+        if value <= 0:
+            raise ValueError("expected file count must be greater than zero")
+        self._expected_file_count = value
+
+    def _registry_overall(self) -> float:
+        if not self._registry:
+            return 0.0
+        denominator = self._expected_file_count or len(self._registry)
+        return sum(self._registry.values()) / max(1, denominator)
 
     async def _emit_single(
         self,
@@ -118,7 +132,7 @@ class ProgressLog:
 
             # Fall back to registry average (same as in emit)
             if self._registry:
-                overall = sum(self._registry.values()) / len(self._registry)
+                overall = self._registry_overall()
             else:
                 overall = 0.0
             overall = max(0.0, min(100.0, float(overall)))
@@ -130,7 +144,7 @@ class ProgressLog:
             if progress_map is not None:
                 return max(0.0, min(100.0, float(self.calculate_overall_progress(progress_map))))
             if self._registry:
-                return max(0.0, min(100.0, float(sum(self._registry.values()) / len(self._registry))))
+                return max(0.0, min(100.0, float(self._registry_overall())))
             return 0.0
 
     async def emit(
@@ -152,7 +166,7 @@ class ProgressLog:
 
             # recompute overall and emit
             if self._registry:
-                overall = sum(self._registry.values()) / len(self._registry)
+                overall = self._registry_overall()
                 await self._emit_single("__overall__", overall, stage=None, threshold=threshold)
         else:
             # explicit overall-only update

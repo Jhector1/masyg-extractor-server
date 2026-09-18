@@ -473,6 +473,7 @@ async def process_files_in_parallel(
     group_id: str,
     progress_logger: ExtractorProgressLog,
     max_concurrency: int | None = None,
+    emit_final_overall: bool = True,
 ) -> Dict[int, Any]:
     """
     Run each file with a small semaphore. Thanks to ProgressLog's registry,
@@ -498,8 +499,10 @@ async def process_files_in_parallel(
         idx, file_id, payload = item
         results[idx] = {"sanitized_filename": file_id, "parsed_content": payload}
 
-    # Final overall 100% (in case the last per-file emit was throttled)
-    await progress_logger.emit(100.0, file_id=None)
+    # Standalone callers retain the historical final 100. Canonical chunked
+    # ingestion suppresses it until the complete logical import finishes.
+    if emit_final_overall:
+        await progress_logger.emit(100.0, file_id=None)
     return results
 # async def process_files_in_parallel(
 #     files: List, user_id: str, group_id: str, progress_logger: ExtractorProgressLog, global_progress: Dict[str, float]

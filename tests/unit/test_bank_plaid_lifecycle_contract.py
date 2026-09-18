@@ -46,11 +46,38 @@ def test_item_health_detects_login_required():
 
 def test_lifecycle_routes_remain_authenticated():
     router = source("masyg_extractor/integrations/bank/router.py")
-    assert '@router.post("/items/{item_id}/link-token")' in router
-    assert '@router.delete("/items/{item_id}")' in router
-    assert '@router.get("/transactions")' in router
-    assert router.count("Depends(get_current_user_from_cookie)") >= 7
 
+    def route_block(marker: str) -> str:
+        assert marker in router
+        start = router.index(marker)
+        next_route = router.find("\n@router.", start + len(marker))
+        return router[
+            start:
+            len(router) if next_route < 0 else next_route
+        ]
+
+    for marker in (
+        '@router.get("/accounts")',
+        '@router.get("/transactions")',
+        '@router.get("/reconciliation")',
+        '@router.delete("/items/{item_id}")',
+    ):
+        block = route_block(marker)
+        assert "Depends(get_current_user_from_cookie)" in block
+        assert "Depends(require_active_subscription)" not in block
+
+    for marker in (
+        '@router.post("/link-token")',
+        '@router.post("/exchange")',
+        '@router.post("/items/{item_id}/link-token")',
+        '@router.post("/transactions/sync")',
+        '@router.post("/transactions/{transaction_id}/match")',
+        '@router.post("/transactions/{transaction_id}/unmatch")',
+        '@router.post("/transactions/{transaction_id}/status")',
+        '@router.post("/transactions/bulk-status")',
+    ):
+        block = route_block(marker)
+        assert "Depends(require_active_subscription)" in block
 
 def test_accounts_resolves_item_health_before_provider_account_fetch():
     from pathlib import Path

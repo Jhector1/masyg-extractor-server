@@ -56,6 +56,8 @@ def make_app(
         get_current_user_from_cookie
     ] = override_user
 
+    app.dependency_overrides[router_module.require_active_accounting_subscription] = override_user
+
     return app
 
 

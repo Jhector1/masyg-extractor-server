@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from masyg_extractor.config.jwt_config import get_current_user_from_cookie
+from masyg_extractor.services.subscription_access import require_active_subscription
 from masyg_extractor.integrations.bank.plaid_client import PlaidApiError, PlaidConfigurationError
 from masyg_extractor.integrations.bank.repository import BankRepositoryConfigurationError
 from masyg_extractor.integrations.bank.reconciliation import BankReconciliationService
@@ -187,7 +188,7 @@ async def plaid_webhook(request: Request):
 
 
 @router.post("/link-token")
-async def create_link_token(current_user: dict = Depends(get_current_user_from_cookie)):
+async def create_link_token(current_user: dict = Depends(require_active_subscription)):
     try:
         return await _service_for(current_user).create_link_token()
     except Exception as exc:
@@ -197,7 +198,7 @@ async def create_link_token(current_user: dict = Depends(get_current_user_from_c
 @router.post("/exchange")
 async def exchange_public_token(
     payload: ExchangePublicTokenRequest,
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_subscription),
 ):
     try:
         return await _service_for(current_user).exchange_public_token(
@@ -245,7 +246,7 @@ async def get_reconciliation(
 async def match_bank_transaction(
     transaction_id: str,
     payload: MatchBankTransactionRequest,
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_subscription),
 ):
     try:
         return await _reconciliation_for(current_user).match_transaction(
@@ -262,7 +263,7 @@ async def match_bank_transaction(
 async def unmatch_bank_transaction(
     transaction_id: str,
     payload: BankTransactionIdentityRequest,
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_subscription),
 ):
     try:
         return await _reconciliation_for(current_user).unmatch_transaction(
@@ -277,7 +278,7 @@ async def unmatch_bank_transaction(
 async def update_bank_transaction_status(
     transaction_id: str,
     payload: UpdateBankTransactionStatusRequest,
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_subscription),
 ):
     try:
         return await _reconciliation_for(current_user).set_status(
@@ -292,7 +293,7 @@ async def update_bank_transaction_status(
 @router.post("/transactions/bulk-status")
 async def bulk_update_bank_transaction_status(
     payload: BulkUpdateBankTransactionStatusRequest,
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_subscription),
 ):
     try:
         return await _reconciliation_for(
@@ -314,7 +315,7 @@ async def bulk_update_bank_transaction_status(
 @router.post("/items/{item_id}/link-token")
 async def create_update_link_token(
     item_id: str,
-    current_user: dict = Depends(get_current_user_from_cookie),
+    current_user: dict = Depends(require_active_subscription),
 ):
     try:
         return await _service_for(current_user).create_update_link_token(item_id)
@@ -334,7 +335,7 @@ async def disconnect_item(
 
 
 @router.post("/transactions/sync")
-async def sync_transactions(current_user: dict = Depends(get_current_user_from_cookie)):
+async def sync_transactions(current_user: dict = Depends(require_active_subscription)):
     try:
         return await _service_for(current_user).sync_transactions()
     except Exception as exc:

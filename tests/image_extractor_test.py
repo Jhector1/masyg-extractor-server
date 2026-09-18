@@ -9,6 +9,8 @@ from PIL import Image
 from server import app  # or "from masyg_extractor.server import app" if that's your entry point
 from masyg_extractor.config.jwt_config import get_current_user_from_cookie
 import masyg_extractor.routes.data_extractor_routes as data_extractor_routes
+from masyg_extractor.services import document_ingestion
+from masyg_extractor.services.subscription_access import require_active_subscription
 
 
 # Override the current cookie-auth dependency for testing
@@ -17,6 +19,14 @@ def override_get_current_user_from_cookie():
 
 
 app.dependency_overrides[get_current_user_from_cookie] = override_get_current_user_from_cookie
+
+def override_require_active_subscription():
+    return {"userId": "test_user"}
+
+
+app.dependency_overrides[
+    require_active_subscription
+] = override_require_active_subscription
 
 
 def create_test_image():
@@ -63,37 +73,37 @@ def test_extract_data_with_image(monkeypatch):
         return io.BytesIO(b"\xff\xd8test-jpeg")
 
     monkeypatch.setattr(
-        data_extractor_routes,
+        document_ingestion,
         "process_files_in_parallel",
         fake_process_files_in_parallel,
     )
     monkeypatch.setattr(
-        data_extractor_routes,
+        document_ingestion,
         "generate_group_id",
         lambda: "test_group",
     )
     monkeypatch.setattr(
-        data_extractor_routes.firestore,
+        document_ingestion.firestore,
         "client",
         lambda: FakeFirestoreReference(),
     )
     monkeypatch.setattr(
-        data_extractor_routes,
+        document_ingestion,
         "document_set",
         fake_document_set,
     )
     monkeypatch.setattr(
-        data_extractor_routes,
+        document_ingestion,
         "compress_file_blob",
         fake_compress_file_blob,
     )
     monkeypatch.setattr(
-        data_extractor_routes.sio,
+        document_ingestion.sio,
         "emit",
         fake_emit,
     )
     monkeypatch.setattr(
-        data_extractor_routes,
+        document_ingestion,
         "send_log",
         fake_send_log,
     )

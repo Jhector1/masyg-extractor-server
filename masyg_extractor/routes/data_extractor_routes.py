@@ -1,6 +1,7 @@
 # masyg_extractor/routes/data_extractor_routes.py
 from __future__ import annotations
 
+from masyg_extractor.services.subscription_access import require_active_subscription
 import asyncio
 import base64
 import io
@@ -26,6 +27,11 @@ from masyg_extractor.services.change_log_services import (
     handle_group_delete,
 )
 from masyg_extractor.services.file_extractor_service import record_failed_file
+from masyg_extractor.services.document_ingestion import (
+    DocumentImportLimitError,
+    ingest_documents,
+    validate_import_count,
+)
 from masyg_extractor.services.processing import process_files_in_parallel
 from masyg_extractor.services.image_extractor_service import compress_file_blob
 from masyg_extractor.services.firestore_helpers import (
@@ -60,164 +66,42 @@ def ok(content: dict | list, status_code: int = 200):
 async def extract_data(
         request: Request,
         files: List[UploadFile] = File(...),
-        current_user: dict = Depends(get_current_user_from_cookie),
+        current_user: dict = Depends(require_active_subscription),
         progress_logger: ExtractorProgressLog = Depends(get_extractor_progress_logger),
 ):
     """
-    Upload N files, extract, parse with GPT, compress & attach, and store records in Firestore.
-    Emits per-file progress with `file_id` and overall progress with `file_id=None`.
+    Upload N files through the canonical provider-neutral ingestion service.
     """
-    failed_files_ids: List[str] = []
-    # failed = 0
-
     client_id = request.session.get("client_id") or "Guest"
     user_id = current_user.get("userId")
     if not user_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID not found")
-
-    # Start fresh progress state for this request context
-    progress_logger.clear()
-
-    # Group ID anchors this batch
-    group_id = generate_group_id()
-
-    # Pre-read files ONCE to keep loop non-blocking and avoid repeated I/O
-    file_buffers: List[tuple[int, UploadFile, bytes]] = []
-    for idx, f in enumerate(files):
-        b = await f.read()
-        await f.seek(0)
-        if not b:
-            logger.warning(f"Empty file: {getattr(f, 'filename', 'unknown')}")
-        file_buffers.append((idx, f, b))
-
-    # Run the parallel pipeline (limits concurrency internally)
-    results = await process_files_in_parallel(
-        file_buffers=file_buffers,
-        user_id=user_id,
-        group_id=group_id,
-        progress_logger=progress_logger,
-        # optional tuning: max_concurrency=min(4, (os.cpu_count() or 2)),
-    )
-
-    # Build metadata + compressed previews for successfully processed files
-    files_metadata: List[Dict[str, str]] = []
-    failed = 0
-
-    # Use a dict keyed by index to line up with `results`
-    for idx, (orig_idx, uf, raw) in enumerate(file_buffers):
-        res = results.get(orig_idx)
-        if not res:
-            failed += 1
-
-            fid = await record_failed_file(user_id, group_id, uf.filename, "Pipeline returned no result",
-                                           stage="pipeline")
-            failed_files_ids.append(fid)
-
-            # best-effort user log
-            asyncio.create_task(send_log(f"❌ {uf.filename} failed to process.", user_room=client_id))
-            continue
-
-        parsed = res.get("parsed_content")
-        if isinstance(parsed, dict) and "error" in parsed:
-            failed += 1
-            fid = await record_failed_file(
-                user_id, group_id, uf.filename,
-                parsed.get("error", "Unknown error"),
-                stage=parsed.get("stage") or "parsing"
-            )
-            failed_files_ids.append(fid)
-            asyncio.create_task(
-                send_log(
-                    f'❌ {uf.filename} failed: {parsed.get("error", "Unknown error")}. '
-                    f"Please submit a valid invoice, bill, or receipt.",
-                    user_room=client_id,
-                )
-            )
-            continue
-
-        sanitized_filename = res.get("sanitized_filename") or uf.filename
-
-        # Attach a compressed preview (optional; you already had this)
-        try:
-            compression_stream = io.BytesIO(raw)
-            compressed_file = await asyncio.to_thread(compress_file_blob, compression_stream, uf.filename)
-            compressed_file.seek(0)
-            content = compressed_file.read()
-            encoded_content = base64.b64encode(content).decode("utf-8")
-            files_metadata.append({"filename": sanitized_filename, "content": encoded_content})
-        except Exception as e:
-            logger.warning(f"Compression failed for {uf.filename}: {e}")
-
-        asyncio.create_task(send_log(f"✅ {uf.filename} processed successfully!", user_room=client_id))
-
-    if failed >= len(file_buffers):
-        # Everyone failed → push to 100 overall and return error
-        # NEW: persist the group + failures so user can see what failed
-        firestore_client = firestore.client()
-        group_doc_ref = (
-            firestore_client.collection("users")
-            .document(user_id)
-            .collection("groups")
-            .document(group_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User ID not found",
         )
-        fail_meta = {
-            "status": "failed",
-            "upload_time": datetime.now().isoformat(),  # or SERVER_TIMESTAMP if you prefer
-            "file_count": 0,
-            "group_name": group_id,
-            "isViewed": False,
-            "failed_count": failed,
-            "failed_files": failed_files_ids,
-        }
-        await document_set(group_doc_ref, {"metadata": fail_meta}, merge=True)
 
-        await sio.emit(EVENT_PROGRESS, {"progress": 100, "file_id": None}, room=client_id)
-        return {"error": "❌ Files Processing Failed"}
+    try:
+        validate_import_count(len(files))
+    except DocumentImportLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
-    # Persist group metadata
-    firestore_client = firestore.client()
-    group_doc_ref = (
-        firestore_client.collection("users")
-        .document(user_id)
-        .collection("groups")
-        .document(group_id)
+    return await ingest_documents(
+        files=files,
+        user_id=user_id,
+        client_id=client_id,
+        progress_logger=progress_logger,
     )
-    metadata = {
-        "upload_time": datetime.now().isoformat(),
-        "file_count": len(file_buffers) - failed,
-        "group_name": group_id,
-        "isViewed": False,
-    }
-    await document_set(group_doc_ref, {"metadata": metadata})
 
-    # after: group_doc_ref.set({"metadata": metadata})
-    if failed > 0:
-        # track how many failed and which file doc ids we wrote
-        metadata["failed_count"] = failed
-        metadata["failed_files"] = failed_files_ids
-        await document_set(group_doc_ref, {"metadata": metadata}, merge=True)
 
-    if files_metadata:
-        metadata["files"] = files_metadata
-        await document_set(group_doc_ref, {"metadata": metadata}, merge=True)
-
-    # Build the response object (files data + metadata)
-    group_obj: Dict[str, Any] = {}
-    for item in results.values():
-        group_obj[item["sanitized_filename"]] = item["parsed_content"]
-    group_obj["group_id"] = group_id
-    group_obj["metadata"] = metadata
-
-    # Ensure final 100% overall to close the UI bar if not already emitted
-    await sio.emit(EVENT_PROGRESS, {"progress": 100, "file_id": None}, room=client_id)
-
-    return group_obj
 
 
 @router.post("/update-change-log")
 async def update_change_log(
         request: Request,
-        current_user: dict = Depends(get_current_user_from_cookie),
+        current_user: dict = Depends(require_active_subscription),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -532,7 +416,7 @@ async def update_record(
         file_name: str,
         record_key: str,
         request: Request,
-        current_user: dict = Depends(get_current_user_from_cookie),
+        current_user: dict = Depends(require_active_subscription),
 ):
     user_id = current_user.get("userId")
     if not user_id:
@@ -558,7 +442,7 @@ async def update_record(
 async def update_group_name(
         group_id: str,
         request: Request,
-        current_user: dict = Depends(get_current_user_from_cookie),
+        current_user: dict = Depends(require_active_subscription),
 ):
     user_id = current_user.get("userId")
     if not user_id:

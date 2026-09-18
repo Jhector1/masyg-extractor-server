@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import masyg_extractor.services.subscription_access as subscription_access
 import asyncio
 import pytest
 from fastapi import HTTPException
@@ -31,8 +32,8 @@ def install_snapshot(monkeypatch, snapshot):
     async def fake_get(doc):
         assert doc.user_id == "user-1"
         return snapshot
-    monkeypatch.setattr(guard, "get_firestore_client", fake_client)
-    monkeypatch.setattr(guard, "document_get", fake_get)
+    monkeypatch.setattr(subscription_access, "get_firestore_client", fake_client)
+    monkeypatch.setattr(subscription_access, "document_get", fake_get)
 
 def run_guard(user=None):
     return asyncio.run(
@@ -62,7 +63,7 @@ def test_missing_user_document_fails_closed(monkeypatch):
 def test_entitlement_lookup_failure_fails_closed(monkeypatch):
     async def failing_client():
         raise RuntimeError("firestore unavailable")
-    monkeypatch.setattr(guard, "get_firestore_client", failing_client)
+    monkeypatch.setattr(subscription_access, "get_firestore_client", failing_client)
     with pytest.raises(HTTPException) as error:
         run_guard()
     assert error.value.status_code == 503

@@ -116,9 +116,7 @@ async def get_accounting_document_handoff(
 @router.post("/preflight")
 async def post_accounting_batch_preflight(
     payload: dict[str, Any],
-    current_user: dict = Depends(
-        get_current_user_from_cookie
-    ),
+    current_user: dict = Depends(require_active_accounting_subscription),
 ):
     user_id = str(
         current_user.get("userId") or ""
@@ -276,9 +274,7 @@ async def post_accounting_batch_preflight(
 @router.post("/execution-plan")
 async def post_accounting_execution_plan(
     payload: dict[str, Any],
-    current_user: dict = Depends(
-        get_current_user_from_cookie
-    ),
+    current_user: dict = Depends(require_active_accounting_subscription),
 ):
     # Re-run canonical preflight at plan time rather than trusting
     # client-supplied readiness state.
@@ -702,9 +698,7 @@ async def post_accounting_execution(
 async def post_accounting_verify_status(
     request: Request,
     payload: dict[str, Any],
-    current_user: dict = Depends(
-        get_current_user_from_cookie
-    ),
+    current_user: dict = Depends(require_active_accounting_subscription),
 ):
     """
     Explicitly verify one duplicate-blocked accounting operation.

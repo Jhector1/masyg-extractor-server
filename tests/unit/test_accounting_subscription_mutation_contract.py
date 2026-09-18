@@ -21,13 +21,34 @@ def test_every_accounting_provider_mutation_requires_active_subscription():
         for endpoint in endpoints:
             assert GUARD in route_block(source, endpoint), (relative, endpoint)
 
-def test_read_only_shared_routes_are_not_subscription_gated():
-    source = (ROOT / "masyg_extractor/integrations/accounting/shared/status_router.py").read_text()
-    for endpoint in ("/batch-preflight", "/execution-plan", "/verify-status", "/status"):
-        marker = f'@router.get("{endpoint}")' if f'@router.get("{endpoint}")' in source else f'@router.post("{endpoint}")'
-        if marker not in source:
-            continue
+def test_shared_accounting_route_subscription_classification():
+    source = (
+        ROOT
+        / "masyg_extractor/integrations/accounting/shared/status_router.py"
+    ).read_text()
+
+    def route_block(method: str, endpoint: str) -> str:
+        marker = f'@router.{method}("{endpoint}")'
+        assert marker in source, endpoint
         start = source.index(marker)
         next_route = source.find("\n@router.", start + len(marker))
-        block = source[start: len(source) if next_route < 0 else next_route]
+        return source[
+            start:
+            len(source) if next_route < 0 else next_route
+        ]
+
+    for endpoint in (
+        "/preflight",
+        "/execution-plan",
+        "/execute",
+        "/verify-status",
+    ):
+        block = route_block("post", endpoint)
+        assert GUARD in block, endpoint
+
+    for method, endpoint in (
+        ("get", "/handoff"),
+        ("get", "/status"),
+    ):
+        block = route_block(method, endpoint)
         assert GUARD not in block, endpoint
