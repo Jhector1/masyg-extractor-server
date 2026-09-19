@@ -15,6 +15,7 @@ from masyg_extractor.services.subscription_services import (
     _recompute_is_subscribed,
     find_firestore_user,
 )
+from masyg_extractor.services.stripe_customer import ensure_stripe_customer_id
 
 # Initialize Firestore client and reference to the "users" collection.
 firestore_db = firestore.client()
@@ -89,20 +90,29 @@ async def create_checkout_session(request : Request, current_user: dict = Depend
         raise HTTPException(status_code=404, detail="User not found in Firestore")
     user_data = doc.to_dict()
 
-    stripe_customer_id = user_data.get("stripeCustomerId")
-    if not stripe_customer_id:
-        try:
-            def blocking_create_customer():
-                return stripe.Customer.create(
-                    email=user_data["email"],
-                    name=user_data["username"],
-                )
-            customer = await run_in_threadpool(blocking_create_customer)
-            await run_in_threadpool(lambda: doc_ref.update({"stripeCustomerId": customer.id}))
-            stripe_customer_id = customer.id
-        except Exception as e:
-            logger.error(f"Error creating Stripe customer: {e}")
-            raise HTTPException(status_code=400, detail="Failed to create Stripe customer")
+    async def persist_stripe_customer_id(customer_id: str) -> None:
+        await run_in_threadpool(
+            lambda: doc_ref.update(
+                {"stripeCustomerId": customer_id}
+            )
+        )
+
+    try:
+        stripe_customer_id = await ensure_stripe_customer_id(
+            existing_customer_id=user_data.get("stripeCustomerId"),
+            email=user_data.get("email"),
+            name=user_data.get("username"),
+            persist_customer_id=persist_stripe_customer_id,
+        )
+    except Exception as exc:
+        logger.error(
+            "Error preparing Stripe customer error_type=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to prepare Stripe customer",
+        ) from exc
 
     # Check if the user has already used the free trial.
     has_used_trial = user_data.get("hasUsedTrial", False)
