@@ -79,6 +79,7 @@ from masyg_extractor.utils.extensions import sio
 from masyg_extractor.config.origins import ALLOWED_ORIGINS
 from masyg_extractor.services.socket_connections import (
     SocketIdentityError,
+    resolve_optional_socket_user_id,
     resolve_session_client_id,
     socket_connections,
 )
@@ -394,6 +395,7 @@ async def connect(sid, environ, auth):
     # The signed Starlette session is the authority for room ownership. The
     # query/auth clientId may confirm it, but can never choose another room.
     client_id = resolve_session_client_id(scope, auth)
+    user_id = resolve_optional_socket_user_id(scope)
   except SocketIdentityError as exc:
     logging.getLogger("masyg.socket").warning(
         "Socket rejected sid=%s reason=%s", sid, str(exc)
@@ -403,6 +405,8 @@ async def connect(sid, environ, auth):
   previous_sid = await socket_connections.claim(client_id, sid)
   try:
     await sio.enter_room(sid, client_id)
+    if user_id:
+        await sio.enter_room(sid, f"user:{user_id}")
     # Send the welcome only to the newly-connected SID so a reconnect cannot
     # duplicate it to the stale connection that is about to be replaced.
     await sio.emit("welcome", {"message": f"Welcome, {client_id}!"}, to=sid)

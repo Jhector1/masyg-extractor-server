@@ -24,6 +24,9 @@ from masyg_extractor.services.progress_log import ExtractorProgressLog
 from masyg_extractor.services.subscription_access import (
     user_has_active_subscription,
 )
+from masyg_extractor.utils.extensions import sio
+
+GMAIL_DOCUMENT_IMPORTED_EVENT = "document-source-imported"
 
 SUPPORTED_GMAIL_DOCUMENT_EXTENSIONS = (
     ".pdf",
@@ -308,6 +311,24 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                         group_id=group_id,
                     )
                     imported += 1
+                    try:
+                        await sio.emit(
+                            GMAIL_DOCUMENT_IMPORTED_EVENT,
+                            {
+                                "source": "gmail",
+                                "groupId": group_id,
+                                "filename": filename,
+                                "imported": 1,
+                            },
+                            room=f"user:{normalized_user}",
+                        )
+                    except Exception as emit_exc:
+                        logger.warning(
+                            "Gmail import notification emit failed "
+                            "user_id=%s error_type=%s",
+                            normalized_user,
+                            type(emit_exc).__name__,
+                        )
                 except Exception as exc:
                     failures += 1
                     await asyncio.to_thread(
