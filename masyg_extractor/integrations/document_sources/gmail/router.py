@@ -199,6 +199,7 @@ async def gmail_callback(
             repository.email_address
         )
 
+        email_address = profile["email_address"]
         mailbox_claim_created = await asyncio.to_thread(
             repository.claim_mailbox_owner,
             email_address,

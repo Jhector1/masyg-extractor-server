@@ -104,3 +104,19 @@ def test_server_installs_sensitive_oauth_access_log_filter():
 
     assert "install_sensitive_oauth_access_log_filter" in source
     assert "install_sensitive_oauth_access_log_filter()" in source
+
+
+def test_gmail_callback_binds_profile_email_before_atomic_claim():
+    source = _source(
+        "masyg_extractor/integrations/document_sources/gmail/router.py"
+    )
+
+    callback = source[
+        source.index('@router.get("/callback")'):
+        source.index('@router.post("/pubsub")')
+    ]
+
+    binding = callback.index("email_address =")
+    claim = callback.index("repository.claim_mailbox_owner")
+
+    assert binding < claim
