@@ -12,6 +12,10 @@ from masyg_extractor.utils.extensions import sio
 from masyg_extractor.utils.helper import FakeUploadFile
 from masyg_extractor.utils.tool import remove_sensitive_data
 from masyg_extractor.services.image_extractor_service import extract_text_from_image
+from masyg_extractor.documents.document_types import (
+    DocumentType,
+    normalize_extracted_document,
+)
 from masyg_extractor.services.file_extractor_service import (
     extract_text_from_pdf,
     extract_text_from_pdf_image,
@@ -255,7 +259,19 @@ async def process_text_and_parse(
     if not json_content:
         return None
 
-    # 3) tolerant validation
+    # 3) canonical normalization + tolerant validation.
+    # Regex fallback and legacy parser output must pass through the same
+    # document-type owner as GPT output before persistence.
+    json_content = normalize_extracted_document(json_content)
+    if not isinstance(json_content, dict):
+        return None
+
+    if json_content.get("documentType") == DocumentType.OTHER.value:
+        return {
+            "error": "Unsupported document type",
+            "stage": "Document classification",
+        }
+
     if not isinstance(json_content.get("line_items"), list):
         json_content["line_items"] = []
 
@@ -322,6 +338,10 @@ async def process_file_async(
             return {'error': 'Text extraction failed'}, uploaded_file.filename
         extractors = get_extractor_list(file_type)
         parsed_content = await process_text_and_parse(extracted_text, file_bytes, uploaded_file,extractors, progress_logger, progress, files_count)
+        if not parsed_content:
+            return {'error': 'error while processing file'}, uploaded_file.filename
+        if parsed_content.get("error"):
+            return parsed_content, uploaded_file.filename
         if len(parsed_content.get('line_items', [])) == 0:
             return {'error': 'error while processing file'}, uploaded_file.filename
         logger.info(f"Final successful extractor used: {extractor_used}")
@@ -432,7 +452,20 @@ async def _process_one(
             )
 
         parsed_content = await _gpt_stage_with_progress(text, progress_logger, per_file, file_id, run_gpt=_run_gpt)
-        if not parsed_content or len(parsed_content.get("line_items", [])) == 0:
+        if not parsed_content:
+            await _finalize_to_100(progress_logger, per_file, file_id, "Parsing failed")
+            return idx, file_id, {"error": "error while processing file", "stage": "Parsing failed"}
+
+        if parsed_content.get("error"):
+            await _finalize_to_100(
+                progress_logger,
+                per_file,
+                file_id,
+                parsed_content.get("stage") or "Parsing failed",
+            )
+            return idx, file_id, parsed_content
+
+        if len(parsed_content.get("line_items", [])) == 0:
             await _finalize_to_100(progress_logger, per_file, file_id, "Parsing failed")
             return idx, file_id, {"error": "error while processing file", "stage": "Parsing failed"}
 
