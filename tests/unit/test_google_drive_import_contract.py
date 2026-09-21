@@ -36,7 +36,7 @@ def test_canonical_ingestion_owns_all_extraction_workflow():
     assert "document_set(" in service
     assert "sio.emit(" in service
 
-    assert "return await ingest_documents(" in route_owner
+    assert "await ingest_documents(" in route_owner
     assert "process_files_in_parallel(" not in route_owner
     assert "record_failed_file(" not in route_owner
     assert "compress_file_blob" not in route_owner

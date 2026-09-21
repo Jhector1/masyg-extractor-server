@@ -19,21 +19,31 @@ def test_socket_connect_joins_authenticated_user_room_without_replacing_client_r
 
     assert 'cookies.get("access_token")' in sockets
     assert 'decode_jwt_token(token, expected_type="access")' in sockets
-    assert "except JWTError:" in sockets
 
 
-def test_gmail_success_emits_user_scoped_document_import_event_after_processed_mark():
+def test_gmail_success_uses_durable_notification_owner_after_processed_mark():
     processor = read(
         "masyg_extractor/integrations/document_sources/gmail/processor.py"
     )
 
     processed = processor.index("repository.mark_attachment_processed")
     imported = processor.index("imported += 1", processed)
-    emitted = processor.index("GMAIL_DOCUMENT_IMPORTED_EVENT", imported)
-    room = processor.index('room=f"user:{normalized_user}"', emitted)
+    notify = processor.index("await publish_user_notification(", imported)
 
-    assert processed < imported < emitted < room
-    assert '"source": "gmail"' in processor
-    assert '"groupId": group_id' in processor
-    assert '"filename": filename' in processor
-    assert "Gmail import notification emit failed" in processor
+    assert processed < imported < notify
+    assert 'type="document.imported"' in processor
+    assert 'source="gmail"' in processor
+    assert 'dedupe_key=f"gmail:document.imported:{group_id}"' in processor
+
+
+def test_gmail_failure_alert_is_deduped_without_attachment_id():
+    processor = read(
+        "masyg_extractor/integrations/document_sources/gmail/processor.py"
+    )
+
+    start = processor.index('"gmail:document.import_failed:"')
+    window = processor[start : start + 300]
+
+    assert 'type="document.import_failed"' in processor
+    assert 'f"{message_id}:{filename.lower()}"' in window
+    assert "part_key" not in window

@@ -18,6 +18,7 @@ def register_routers(app: FastAPI):
     from .analytics_routes import router as analytics_router
     from .payment_routes import router as payment_router
     from .user_routes import router as user_router
+    from .notification_routes import router as notification_router
     environment = os.getenv("FAST_API_ENV", "development").lower()
 
     # Test-only extraction endpoints must never be reachable in production.
@@ -28,6 +29,7 @@ def register_routers(app: FastAPI):
     app.include_router(file_extractor_router, prefix="/api")
     app.include_router(payment_router, prefix="/api")
     app.include_router(user_router, prefix="/api")
+    app.include_router(notification_router, prefix="/api")
     app.include_router(webhook_router, prefix="/api")
     app.include_router(csrf_router)
 

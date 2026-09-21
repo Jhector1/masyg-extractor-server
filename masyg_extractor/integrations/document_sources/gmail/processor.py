@@ -24,9 +24,7 @@ from masyg_extractor.services.progress_log import ExtractorProgressLog
 from masyg_extractor.services.subscription_access import (
     user_has_active_subscription,
 )
-from masyg_extractor.utils.extensions import sio
-
-GMAIL_DOCUMENT_IMPORTED_EVENT = "document-source-imported"
+from masyg_extractor.services.user_notifications import publish_user_notification
 
 SUPPORTED_GMAIL_DOCUMENT_EXTENSIONS = (
     ".pdf",
@@ -312,22 +310,25 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                     )
                     imported += 1
                     try:
-                        await sio.emit(
-                            GMAIL_DOCUMENT_IMPORTED_EVENT,
-                            {
-                                "source": "gmail",
-                                "groupId": group_id,
-                                "filename": filename,
-                                "imported": 1,
+                        await publish_user_notification(
+                            user_id=normalized_user,
+                            type="document.imported",
+                            source="gmail",
+                            severity="success",
+                            title="Document imported",
+                            message=f"{filename} was imported from Gmail.",
+                            entity={
+                                "type": "group",
+                                "id": group_id,
                             },
-                            room=f"user:{normalized_user}",
+                            dedupe_key=f"gmail:document.imported:{group_id}",
                         )
-                    except Exception as emit_exc:
+                    except Exception as notification_exc:
                         logger.warning(
-                            "Gmail import notification emit failed "
+                            "Gmail import notification failed "
                             "user_id=%s error_type=%s",
                             normalized_user,
-                            type(emit_exc).__name__,
+                            type(notification_exc).__name__,
                         )
                 except Exception as exc:
                     failures += 1
@@ -343,6 +344,30 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                         normalized_user,
                         type(exc).__name__,
                     )
+                    try:
+                        await publish_user_notification(
+                            user_id=normalized_user,
+                            type="document.import_failed",
+                            source="gmail",
+                            severity="warning",
+                            title="Gmail import needs attention",
+                            message=f"{filename} could not be imported from Gmail.",
+                            entity={
+                                "type": "gmail-message",
+                                "id": message_id,
+                            },
+                            dedupe_key=(
+                                "gmail:document.import_failed:"
+                                f"{message_id}:{filename.lower()}"
+                            ),
+                        )
+                    except Exception as notification_exc:
+                        logger.warning(
+                            "Gmail failure notification failed "
+                            "user_id=%s error_type=%s",
+                            normalized_user,
+                            type(notification_exc).__name__,
+                        )
 
         if failures:
             logger.warning(

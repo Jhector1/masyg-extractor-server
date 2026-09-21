@@ -44,7 +44,7 @@ def test_extract_route_delegates_to_canonical_ingestion():
     route = (ROOT / "masyg_extractor/routes/data_extractor_routes.py").read_text()
     service = (ROOT / "masyg_extractor/services/document_ingestion.py").read_text()
 
-    assert "return await ingest_documents(" in route
+    assert "await ingest_documents(" in _extract_data_function(route)
     assert "process_files_in_parallel(" not in _extract_data_function(route)
     assert "await process_files_in_parallel(" in service
     assert "file_buffers = await buffer_upload_files(" in service

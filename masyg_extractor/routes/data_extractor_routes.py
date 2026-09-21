@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from masyg_extractor.services.subscription_access import require_active_subscription
+from masyg_extractor.services.user_notifications import publish_user_notification
 import asyncio
 import base64
 import io
@@ -10,7 +11,7 @@ from datetime import datetime
 from pprint import pprint
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Request, UploadFile, File, Depends, HTTPException, status
+from fastapi import APIRouter, Request, UploadFile, File, Form, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
 from firebase_admin import firestore, firestore as admin_fs
@@ -66,6 +67,7 @@ def ok(content: dict | list, status_code: int = 200):
 async def extract_data(
         request: Request,
         files: List[UploadFile] = File(...),
+        source: str = Form("local"),
         current_user: dict = Depends(require_active_subscription),
         progress_logger: ExtractorProgressLog = Depends(get_extractor_progress_logger),
 ):
@@ -80,6 +82,13 @@ async def extract_data(
             detail="User ID not found",
         )
 
+    normalized_source = str(source or "local").strip().lower()
+    if normalized_source not in {"local", "dropbox"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unsupported document upload source",
+        )
+
     try:
         validate_import_count(len(files))
     except DocumentImportLimitError as exc:
@@ -88,12 +97,44 @@ async def extract_data(
             detail=str(exc),
         ) from exc
 
-    return await ingest_documents(
+    result = await ingest_documents(
         files=files,
         user_id=user_id,
         client_id=client_id,
         progress_logger=progress_logger,
     )
+
+    if normalized_source == "dropbox" and not result.get("error"):
+        group_id = str(result.get("group_id") or "").strip()
+        metadata = result.get("metadata") or {}
+        imported_count = int(metadata.get("file_count") or 0)
+
+        try:
+            await publish_user_notification(
+                user_id=user_id,
+                type="document.imported",
+                source="dropbox",
+                severity="success",
+                title="Dropbox import complete",
+                message=(
+                    f"{imported_count} document"
+                    f"{'' if imported_count == 1 else 's'} imported from Dropbox."
+                ),
+                entity={
+                    "type": "group",
+                    "id": group_id,
+                },
+                dedupe_key=f"dropbox:document.imported:{group_id}",
+            )
+        except Exception as notification_exc:
+            logger.warning(
+                "Dropbox import notification failed "
+                "user_id=%s error_type=%s",
+                user_id,
+                type(notification_exc).__name__,
+            )
+
+    return result
 
 
 
