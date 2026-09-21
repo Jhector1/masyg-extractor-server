@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import io
-from typing import Iterator
 
 from masyg_extractor.integrations.document_sources.gmail.client import (
     GmailHistoryExpiredError,
@@ -11,6 +9,11 @@ from masyg_extractor.integrations.document_sources.gmail.client import (
     get_gmail_attachment,
     get_gmail_message,
     list_gmail_history,
+)
+from masyg_extractor.integrations.document_sources.gmail.identity import (
+    gmail_group_id,
+    gmail_part_key,
+    iter_gmail_parts,
 )
 from masyg_extractor.integrations.document_sources.gmail.repository import (
     GmailCredentialRepository,
@@ -59,56 +62,12 @@ class GmailAttachmentUpload:
             self._stream.close()
 
 
-def _iter_parts(payload: dict) -> Iterator[dict]:
-    if not isinstance(payload, dict):
-        return
-    yield payload
-    for part in payload.get("parts") or []:
-        if isinstance(part, dict):
-            yield from _iter_parts(part)
-
-
 def _supported_attachment(part: dict) -> bool:
     filename = str(part.get("filename") or "").strip().lower()
     return bool(
         filename
         and filename.endswith(SUPPORTED_GMAIL_DOCUMENT_EXTENSIONS)
     )
-
-
-def _part_key(part: dict) -> str:
-    body = part.get("body") or {}
-    attachment_id = str(body.get("attachmentId") or "").strip()
-    if attachment_id:
-        return f"attachment:{attachment_id}"
-
-    part_id = str(part.get("partId") or "").strip()
-    if part_id:
-        return f"part:{part_id}"
-
-    fingerprint = (
-        str(part.get("filename") or "")
-        + "\0"
-        + str(body.get("data") or "")
-    )
-    return "inline:" + hashlib.sha256(
-        fingerprint.encode("utf-8")
-    ).hexdigest()
-
-
-def _gmail_group_id(
-    message_id: str,
-    part_key: str,
-) -> str:
-    raw = (
-        str(message_id or "").strip()
-        + "\0"
-        + str(part_key or "").strip()
-    )
-    digest = hashlib.sha256(
-        raw.encode("utf-8")
-    ).hexdigest()
-    return f"gmail-{digest[:40]}"
 
 
 async def _part_bytes(
@@ -232,14 +191,29 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                 continue
 
             payload = message.get("payload") or {}
-            for part in _iter_parts(payload):
-                if not _supported_attachment(part):
-                    continue
+            supported_parts = [
+                (part, mime_path)
+                for part, mime_path in iter_gmail_parts(payload)
+                if _supported_attachment(part)
+            ]
+            filename_counts: dict[str, int] = {}
+            for candidate, _ in supported_parts:
+                normalized_filename = str(
+                    candidate.get("filename") or ""
+                ).strip().casefold()
+                filename_counts[normalized_filename] = (
+                    filename_counts.get(normalized_filename, 0)
+                    + 1
+                )
 
+            for part, mime_path in supported_parts:
                 supported += 1
                 filename = str(part.get("filename") or "").strip()
-                part_key = _part_key(part)
-                group_id = _gmail_group_id(
+                part_key = gmail_part_key(
+                    part,
+                    mime_path=mime_path,
+                )
+                group_id = gmail_group_id(
                     message_id,
                     part_key,
                 )
@@ -257,6 +231,36 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                     continue
 
                 try:
+                    normalized_filename = filename.casefold()
+                    legacy_group_id = ""
+                    if (
+                        filename_counts.get(
+                            normalized_filename,
+                            0,
+                        )
+                        == 1
+                    ):
+                        legacy_group_id = await asyncio.to_thread(
+                            repository.legacy_processed_attachment_group,
+                            message_id=message_id,
+                            filename=filename,
+                        )
+
+                    if (
+                        legacy_group_id
+                        and await asyncio.to_thread(
+                            repository.group_ingestion_succeeded,
+                            legacy_group_id,
+                        )
+                    ):
+                        await asyncio.to_thread(
+                            repository.mark_attachment_processed,
+                            message_id=message_id,
+                            part_key=part_key,
+                            group_id=legacy_group_id,
+                        )
+                        continue
+
                     if await asyncio.to_thread(
                         repository.group_ingestion_succeeded,
                         group_id,

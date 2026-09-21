@@ -125,11 +125,15 @@ def test_gmail_uses_deterministic_group_id_for_canonical_ingestion():
     processor = read(
         "masyg_extractor/integrations/document_sources/gmail/processor.py"
     )
+    identity = read(
+        "masyg_extractor/integrations/document_sources/gmail/identity.py"
+    )
     ingestion = read(
         "masyg_extractor/services/document_ingestion.py"
     )
 
-    assert "def _gmail_group_id(" in processor
+    assert "def gmail_group_id(" in identity
+    assert "gmail_group_id(" in processor
     assert "group_id=group_id" in processor
     assert "group_id: str | None = None" in ingestion
     assert (

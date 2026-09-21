@@ -576,6 +576,63 @@ class GmailCredentialRepository:
 
         return str(_claim(transaction) or "busy")
 
+    def legacy_processed_attachment_group(
+        self,
+        *,
+        message_id: str,
+        filename: str,
+    ) -> str:
+        """
+        Resolve one unambiguous processed claim created by the legacy
+        attachmentId-based identity scheme.
+
+        Filename is only a migration discriminator. New durable identity
+        never depends on filename alone.
+        """
+        normalized_message = str(message_id or "").strip()
+        normalized_filename = str(filename or "").strip().casefold()
+        if not normalized_message or not normalized_filename:
+            return ""
+
+        claims = self.integration_ref().collection("gmailImports")
+        query = claims.where(
+            "messageId",
+            "==",
+            normalized_message,
+        )
+
+        group_ids: set[str] = set()
+        for snapshot in query.stream():
+            if not snapshot.exists:
+                continue
+
+            current = snapshot.to_dict() or {}
+            if current.get("status") != "processed":
+                continue
+
+            part_key = str(
+                current.get("partKey") or ""
+            ).strip()
+            if not part_key.startswith("attachment:"):
+                continue
+
+            current_filename = str(
+                current.get("filename") or ""
+            ).strip().casefold()
+            if current_filename != normalized_filename:
+                continue
+
+            group_id = str(
+                current.get("groupId") or ""
+            ).strip()
+            if group_id:
+                group_ids.add(group_id)
+
+        if len(group_ids) != 1:
+            return ""
+
+        return next(iter(group_ids))
+
     def group_ingestion_succeeded(
         self,
         group_id: str,
