@@ -38,7 +38,11 @@ def test_watch_and_notification_do_not_advance_processed_cursor():
     record_start = repository.index(
         "def record_notification"
     )
-    record_block = repository[record_start:]
+    record_end = repository.index(
+        "def notification_state",
+        record_start,
+    )
+    record_block = repository[record_start:record_end]
     assert "gmailHistoryId" not in record_block
 
 
@@ -108,19 +112,19 @@ def test_daily_scheduler_renews_gmail_watch():
     )
 
 
-def test_a3c_still_does_not_fetch_or_ingest_mailbox_content():
-    gmail_dir = (
-        ROOT
-        / "masyg_extractor"
-        / "integrations"
-        / "document_sources"
-        / "gmail"
+def test_a3c_watch_boundary_stays_separate_from_a3d_ingestion():
+    service = read(
+        "masyg_extractor/integrations/document_sources/gmail/service.py"
     )
-    combined = "\n".join(
-        path.read_text()
-        for path in gmail_dir.glob("*.py")
+    pubsub = read(
+        "masyg_extractor/integrations/document_sources/gmail/pubsub.py"
+    )
+    processor = read(
+        "masyg_extractor/integrations/document_sources/gmail/processor.py"
     )
 
-    assert "history.list" not in combined
-    assert "attachments.get" not in combined
-    assert "ingest_documents" not in combined
+    assert "ingest_documents" not in service
+    assert "ingest_documents" not in pubsub
+    assert "ingest_documents" in processor
+    assert "list_gmail_history" in processor
+    assert "get_gmail_attachment" in processor

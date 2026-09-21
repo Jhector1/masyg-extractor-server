@@ -374,7 +374,328 @@ class GmailCredentialRepository:
 
         _record(transaction)
 
+
+    def notification_state(self) -> dict:
+        snapshot = self.integration_ref().get()
+        if not snapshot.exists:
+            return {}
+        return dict(
+            (snapshot.to_dict() or {}).get("gmailNotification") or {}
+        )
+
+    def latest_notification_history_id(self) -> str:
+        return str(
+            self.notification_state().get("latestHistoryId") or ""
+        ).strip()
+
+    def advance_history_id(self, history_id: str) -> None:
+        normalized = str(history_id or "").strip()
+        if not normalized or not normalized.isdigit():
+            raise ValueError("Gmail processed historyId is invalid")
+
+        token = self.get_token()
+        access_token = str(
+            token.get("accessToken") or token.get("access_token") or ""
+        ).strip()
+        refresh_token = str(
+            token.get("refreshToken") or token.get("refresh_token") or ""
+        ).strip()
+        email_address = str(token.get("gmailEmail") or "").strip()
+        if not access_token or not refresh_token or not email_address:
+            raise ValueError("Gmail credential is incomplete")
+
+        token_kwargs = {
+            "scope": str(token.get("scope") or "").strip(),
+            "gmailEmail": _normalized_email(email_address),
+            "gmailHistoryId": normalized,
+        }
+        expires_at = str(token.get("expiresAt") or "").strip()
+        if expires_at:
+            token_kwargs["expiresAt"] = expires_at
+
+        self.tokens.store_integration_token(
+            access_token,
+            refresh_token,
+            3600,
+            **token_kwargs,
+        )
+
+    def claim_processing_lease(self, lease_seconds: int = 1800) -> str:
+        from datetime import datetime, timedelta, timezone
+        import uuid
+
+        ref = self.integration_ref()
+        transaction = self.db.transaction()
+        now = datetime.now(timezone.utc)
+        lease_token = uuid.uuid4().hex
+
+        @firestore.transactional
+        def _claim(txn):
+            snapshot = ref.get(transaction=txn)
+            if not snapshot.exists:
+                return ""
+
+            current = dict(
+                (snapshot.to_dict() or {}).get("gmailProcessing") or {}
+            )
+            lease_until = current.get("leaseUntil")
+            if isinstance(lease_until, datetime):
+                if lease_until.tzinfo is None:
+                    lease_until = lease_until.replace(tzinfo=timezone.utc)
+                if (
+                    current.get("status") == "running"
+                    and lease_until > now
+                ):
+                    return ""
+
+            txn.set(
+                ref,
+                {
+                    "gmailProcessing": {
+                        "status": "running",
+                        "token": lease_token,
+                        "startedAt": firestore.SERVER_TIMESTAMP,
+                        "leaseUntil": now + timedelta(
+                            seconds=max(60, int(lease_seconds))
+                        ),
+                    }
+                },
+                merge=True,
+            )
+            return lease_token
+
+        return str(_claim(transaction) or "")
+
+    def release_processing_lease(self, lease_token: str) -> None:
+        token = str(lease_token or "").strip()
+        if not token:
+            return
+
+        ref = self.integration_ref()
+        transaction = self.db.transaction()
+
+        @firestore.transactional
+        def _release(txn):
+            snapshot = ref.get(transaction=txn)
+            if not snapshot.exists:
+                return
+
+            current = dict(
+                (snapshot.to_dict() or {}).get("gmailProcessing") or {}
+            )
+            if str(current.get("token") or "") != token:
+                return
+
+            txn.set(
+                ref,
+                {
+                    "gmailProcessing": {
+                        "status": "idle",
+                        "token": "",
+                        "leaseUntil": None,
+                        "finishedAt": firestore.SERVER_TIMESTAMP,
+                    }
+                },
+                merge=True,
+            )
+
+        _release(transaction)
+
+    def _import_claim_ref(self, *, message_id: str, part_key: str):
+        raw = (
+            str(message_id or "").strip()
+            + "\0"
+            + str(part_key or "").strip()
+        )
+        if raw == "\0":
+            raise ValueError("Gmail import claim identity is required")
+        claim_id = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return (
+            self.integration_ref()
+            .collection("gmailImports")
+            .document(claim_id)
+        )
+
+    def claim_attachment(
+        self,
+        *,
+        message_id: str,
+        part_key: str,
+        filename: str,
+        lease_seconds: int = 1800,
+    ) -> str:
+        from datetime import datetime, timedelta, timezone
+
+        ref = self._import_claim_ref(
+            message_id=message_id,
+            part_key=part_key,
+        )
+        transaction = self.db.transaction()
+        now = datetime.now(timezone.utc)
+
+        @firestore.transactional
+        def _claim(txn):
+            snapshot = ref.get(transaction=txn)
+            current = (
+                snapshot.to_dict() or {}
+                if snapshot.exists
+                else {}
+            )
+
+            if current.get("status") == "processed":
+                return "processed"
+
+            lease_until = current.get("leaseUntil")
+            if isinstance(lease_until, datetime):
+                if lease_until.tzinfo is None:
+                    lease_until = lease_until.replace(tzinfo=timezone.utc)
+                if (
+                    current.get("status") == "processing"
+                    and lease_until > now
+                ):
+                    return "busy"
+
+            txn.set(
+                ref,
+                {
+                    "status": "processing",
+                    "messageId": str(message_id or "").strip(),
+                    "partKey": str(part_key or "").strip(),
+                    "filename": str(filename or "").strip(),
+                    "claimedAt": firestore.SERVER_TIMESTAMP,
+                    "leaseUntil": now + timedelta(
+                        seconds=max(60, int(lease_seconds))
+                    ),
+                    "attemptCount": int(
+                        current.get("attemptCount") or 0
+                    ) + 1,
+                },
+                merge=True,
+            )
+            return "claimed"
+
+        return str(_claim(transaction) or "busy")
+
+    def group_ingestion_succeeded(
+        self,
+        group_id: str,
+    ) -> bool:
+        normalized = str(group_id or "").strip()
+        if not normalized:
+            return False
+
+        snapshot = (
+            self.db.collection("users")
+            .document(self.user_id)
+            .collection("groups")
+            .document(normalized)
+            .get()
+        )
+        if not snapshot.exists:
+            return False
+
+        metadata = dict(
+            (snapshot.to_dict() or {}).get("metadata")
+            or {}
+        )
+        if metadata.get("status") == "failed":
+            return False
+
+        try:
+            file_count = int(metadata.get("file_count") or 0)
+        except (TypeError, ValueError):
+            return False
+        return file_count > 0
+
+    def mark_attachment_processed(
+        self,
+        *,
+        message_id: str,
+        part_key: str,
+        group_id: str,
+    ) -> None:
+        ref = self._import_claim_ref(
+            message_id=message_id,
+            part_key=part_key,
+        )
+        ref.set(
+            {
+                "status": "processed",
+                "groupId": str(group_id or "").strip(),
+                "leaseUntil": None,
+                "processedAt": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+
+    def mark_attachment_failed(
+        self,
+        *,
+        message_id: str,
+        part_key: str,
+        error_type: str,
+    ) -> None:
+        ref = self._import_claim_ref(
+            message_id=message_id,
+            part_key=part_key,
+        )
+        ref.set(
+            {
+                "status": "failed",
+                "errorType": str(error_type or "").strip(),
+                "leaseUntil": None,
+                "failedAt": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+
+    def mark_sync_recovery_required(
+        self,
+        *,
+        processed_history_id: str,
+        latest_history_id: str,
+    ) -> None:
+        self.integration_ref().set(
+            {
+                "gmailSync": {
+                    "status": "recovery_required",
+                    "processedHistoryId": str(
+                        processed_history_id or ""
+                    ).strip(),
+                    "latestHistoryId": str(
+                        latest_history_id or ""
+                    ).strip(),
+                    "updatedAt": firestore.SERVER_TIMESTAMP,
+                }
+            },
+            merge=True,
+        )
+
+    def mark_sync_healthy(
+        self,
+        *,
+        processed_history_id: str,
+    ) -> None:
+        self.integration_ref().set(
+            {
+                "gmailSync": {
+                    "status": "healthy",
+                    "processedHistoryId": str(
+                        processed_history_id or ""
+                    ).strip(),
+                    "updatedAt": firestore.SERVER_TIMESTAMP,
+                }
+            },
+            merge=True,
+        )
+
+    def _delete_import_claims(self) -> None:
+        claims = self.integration_ref().collection("gmailImports")
+        for snapshot in claims.stream():
+            snapshot.reference.delete()
+
     def disconnect(self) -> None:
         email_address = self.email_address()
         self.release_mailbox_owner(email_address)
+        self._delete_import_claims()
         self.integration_ref().delete()

@@ -23,7 +23,11 @@ def test_chunk_size_is_shared_runtime_env_policy():
 
 def test_chunking_keeps_one_group_and_one_result_owner():
     service = read("masyg_extractor/services/document_ingestion.py")
-    assert service.count("group_id = generate_group_id()") == 1
+    assert service.count("generate_group_id()") == 1
+    assert (
+        'group_id = str(group_id or "").strip() or generate_group_id()'
+        in service
+    )
     assert "results.update(chunk_results)" in service
     assert "emit_final_overall=False" in service
     assert 'group_obj["group_id"] = group_id' in service

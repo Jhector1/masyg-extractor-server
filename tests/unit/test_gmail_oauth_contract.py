@@ -195,16 +195,15 @@ def test_disconnect_revokes_google_before_local_delete():
     assert "HTTP_502_BAD_GATEWAY" in disconnect
 
 
-def test_no_push_or_mailbox_processing_is_added_in_oauth_foundation():
-    root = (
-        ROOT
-        / "masyg_extractor/integrations/document_sources/gmail"
+def test_oauth_callback_does_not_directly_run_a3d_ingestion():
+    source = read(
+        "masyg_extractor/integrations/document_sources/gmail/router.py"
     )
-    combined = "\n".join(
-        path.read_text()
-        for path in root.glob("*.py")
-    )
+    callback = source[
+        source.index('@router.get("/callback")'):
+        source.index('@router.post("/pubsub")')
+    ]
 
-    assert "history.list" not in combined
-    assert "attachments.get" not in combined
-    assert "ingest_documents" not in combined
+    assert "ingest_documents" not in callback
+    assert "list_gmail_history" not in callback
+    assert "get_gmail_attachment" not in callback

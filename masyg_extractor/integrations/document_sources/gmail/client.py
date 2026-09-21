@@ -319,3 +319,176 @@ async def stop_gmail_watch(access_token: str) -> None:
         raise GmailUnauthorizedError("Gmail access token expired")
     if response.is_error:
         raise GmailOAuthError("Unable to stop Gmail mailbox watch")
+
+# -------------------------------------------------------------------------------------------------
+# A3D automatic document import client
+# -------------------------------------------------------------------------------------------------
+
+class GmailHistoryExpiredError(GmailOAuthError):
+    pass
+
+
+def decode_gmail_body_data(value: str) -> bytes:
+    import base64
+
+    encoded = str(value or "").strip()
+    if not encoded:
+        return b""
+    padding = "=" * (-len(encoded) % 4)
+    try:
+        return base64.urlsafe_b64decode((encoded + padding).encode("ascii"))
+    except (ValueError, TypeError) as exc:
+        raise GmailOAuthError(
+            "Google returned invalid Gmail attachment data"
+        ) from exc
+
+
+async def list_gmail_history(
+    access_token: str,
+    *,
+    start_history_id: str,
+    page_token: str | None = None,
+) -> dict:
+    start = str(start_history_id or "").strip()
+    if not start or not start.isdigit():
+        raise GmailOAuthError("Gmail processed historyId is invalid")
+
+    params: dict[str, str | int] = {
+        "startHistoryId": start,
+        "historyTypes": "messageAdded",
+        "labelId": "INBOX",
+        "maxResults": 500,
+    }
+    token = str(page_token or "").strip()
+    if token:
+        params["pageToken"] = token
+
+    url = f"{GMAIL_API_BASE}/users/me/history"
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        response = await http.get(
+            url,
+            headers=_auth_headers(access_token),
+            params=params,
+        )
+
+    if response.status_code == 401:
+        raise GmailUnauthorizedError("Gmail access token expired")
+    if response.status_code == 404:
+        raise GmailHistoryExpiredError(
+            "Gmail history cursor is no longer available"
+        )
+    if response.is_error:
+        raise GmailOAuthError("Unable to read Gmail mailbox history")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise GmailOAuthError(
+            "Google returned an invalid Gmail history response"
+        ) from exc
+
+    history_id = str(payload.get("historyId") or "").strip()
+    if not history_id or not history_id.isdigit():
+        raise GmailOAuthError(
+            "Google returned an invalid current Gmail historyId"
+        )
+
+    message_ids: list[str] = []
+    seen: set[str] = set()
+    for history in payload.get("history") or []:
+        if not isinstance(history, dict):
+            continue
+        for added in history.get("messagesAdded") or []:
+            if not isinstance(added, dict):
+                continue
+            message = added.get("message") or {}
+            if not isinstance(message, dict):
+                continue
+            message_id = str(message.get("id") or "").strip()
+            if message_id and message_id not in seen:
+                seen.add(message_id)
+                message_ids.append(message_id)
+
+    return {
+        "message_ids": message_ids,
+        "history_id": history_id,
+        "next_page_token": str(payload.get("nextPageToken") or "").strip(),
+    }
+
+
+async def get_gmail_message(access_token: str, message_id: str) -> dict:
+    normalized = str(message_id or "").strip()
+    if not normalized:
+        raise GmailOAuthError("Gmail message id is required")
+
+    url = f"{GMAIL_API_BASE}/users/me/messages/{normalized}"
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        response = await http.get(
+            url,
+            headers=_auth_headers(access_token),
+            params={"format": "full"},
+        )
+
+    if response.status_code == 401:
+        raise GmailUnauthorizedError("Gmail access token expired")
+    if response.is_error:
+        raise GmailOAuthError("Unable to read Gmail message")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise GmailOAuthError(
+            "Google returned an invalid Gmail message response"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise GmailOAuthError(
+            "Google returned an invalid Gmail message payload"
+        )
+    return payload
+
+
+async def get_gmail_attachment(
+    access_token: str,
+    *,
+    message_id: str,
+    attachment_id: str,
+) -> bytes:
+    message = str(message_id or "").strip()
+    attachment = str(attachment_id or "").strip()
+    if not message or not attachment:
+        raise GmailOAuthError(
+            "Gmail message and attachment ids are required"
+        )
+
+    url = (
+        f"{GMAIL_API_BASE}/users/me/messages/{message}"
+        f"/attachments/{attachment}"
+    )
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        response = await http.get(
+            url,
+            headers=_auth_headers(access_token),
+        )
+
+    if response.status_code == 401:
+        raise GmailUnauthorizedError("Gmail access token expired")
+    if response.is_error:
+        raise GmailOAuthError("Unable to read Gmail attachment")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise GmailOAuthError(
+            "Google returned an invalid Gmail attachment response"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise GmailOAuthError(
+            "Google returned an invalid Gmail attachment payload"
+        )
+
+    data = decode_gmail_body_data(str(payload.get("data") or ""))
+    if not data:
+        raise GmailOAuthError("Gmail attachment is empty")
+    return data

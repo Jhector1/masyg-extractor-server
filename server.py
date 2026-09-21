@@ -313,6 +313,18 @@ async def _startup():
         max_instances=1,
     )
 
+    from masyg_extractor.integrations.document_sources.gmail.processor import process_pending_gmail_notifications
+
+    scheduler.add_job(
+      process_pending_gmail_notifications,
+      trigger=IntervalTrigger(seconds=60),
+      id="gmail_notification_processor",
+      replace_existing=True,
+      coalesce=True,
+      misfire_grace_time=120,
+      max_instances=1,
+    )
+
     scheduler.start()
     inner.state.scheduler = scheduler
 

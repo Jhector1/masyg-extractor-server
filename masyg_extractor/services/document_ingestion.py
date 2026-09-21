@@ -102,6 +102,7 @@ async def ingest_documents(
     user_id: str,
     client_id: str,
     progress_logger: ExtractorProgressLog,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     normalized_user_id = str(user_id or "").strip()
     if not normalized_user_id:
@@ -114,7 +115,7 @@ async def ingest_documents(
     room = str(client_id or "").strip() or "Guest"
     progress_logger.clear()
     progress_logger.set_expected_file_count(total_files)
-    group_id = generate_group_id()
+    group_id = str(group_id or "").strip() or generate_group_id()
 
     results: dict[int, Any] = {}
     files_metadata: list[dict[str, str]] = []
