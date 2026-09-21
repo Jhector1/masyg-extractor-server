@@ -51,6 +51,12 @@ from masyg_extractor.services.subscription_services import _recompute_is_subscri
 import logging
 import uuid
 import logging
+
+from masyg_extractor.utils.access_log_redaction import (
+    install_sensitive_oauth_access_log_filter,
+)
+
+install_sensitive_oauth_access_log_filter()
 # if ENV != "development":
 #     logging.getLogger("uvicorn").setLevel(logging.WARNING)
 #     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
@@ -204,6 +210,9 @@ from masyg_extractor.integrations.bank.webhook_processor import (
 from masyg_extractor.integrations.bank.webhook_repository import (
     BankWebhookRepository,
 )
+from masyg_extractor.integrations.document_sources.gmail.service import (
+    renew_gmail_watches,
+)
 
 
 
@@ -288,6 +297,19 @@ async def _startup():
         replace_existing=True,
         coalesce=True,
         misfire_grace_time=30,
+        max_instances=1,
+    )
+
+    scheduler.add_job(
+        renew_gmail_watches,
+        trigger=CronTrigger(
+            hour=2,
+            minute=15,
+        ),
+        id="gmail_watch_renewal_daily",
+        replace_existing=True,
+        coalesce=True,
+        misfire_grace_time=3600,
         max_instances=1,
     )
 

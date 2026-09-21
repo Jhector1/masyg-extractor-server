@@ -719,8 +719,33 @@ async def delete_my_account(
             # If there is a Stripe customer ID, try to delete the associated Stripe customer data.
             if stripe_customer_id:
                 await delete_stripe_customer_data(stripe_customer_id)
-            # Firestore does not cascade-delete subcollections. Remove refresh
-            # sessions before deleting the parent user document.
+            # Firestore does not cascade-delete subcollections. Gmail owns
+            # an integration subdocument plus a top-level reverse-mailbox index, so
+            # remove both before deleting the parent user document. Provider watch
+            # shutdown is best-effort; local credential/index deletion is strict.
+            try:
+                from masyg_extractor.integrations.document_sources.gmail.service import (
+                    stop_gmail_watch_for_user,
+                )
+
+                await stop_gmail_watch_for_user(user_id)
+            except Exception as exc:
+                logger.warning(
+                    "Gmail watch stop during account deletion failed "
+                    "error_type=%s",
+                    type(exc).__name__,
+                )
+
+            from masyg_extractor.integrations.document_sources.gmail.repository import (
+                GmailCredentialRepository,
+            )
+            import asyncio as _asyncio
+
+            await _asyncio.to_thread(
+                GmailCredentialRepository(user_id).disconnect
+            )
+
+            # Remove refresh sessions before deleting the parent user document.
             await revoke_all_refresh_sessions(user_id)
             # Delete the user document from Firestore.
             await document_delete(user_ref)

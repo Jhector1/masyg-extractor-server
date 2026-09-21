@@ -7,6 +7,7 @@ from masyg_extractor.integrations.accounting.shared.status_router import (
 )
 from masyg_extractor.integrations.bank.router import router as bank_router
 from masyg_extractor.integrations.document_sources.google_drive.router import router as google_drive_router
+from masyg_extractor.integrations.document_sources.gmail.router import router as gmail_router
 
 from .admin.admin_webhook import router as webhook_router
 from .csrf_routes import csrf_router
@@ -35,6 +36,7 @@ def register_routers(app: FastAPI):
     app.include_router(accounting_status_router, prefix="")
     app.include_router(bank_router, prefix="")
     app.include_router(google_drive_router, prefix="")
+    app.include_router(gmail_router, prefix="")
     app.include_router(analytics_router, prefix="/api")
 
     # Debug mutation endpoints must never be exposed in production.

@@ -68,3 +68,26 @@ async def require_active_subscription(
         )
 
     return current_user
+
+
+async def user_has_active_subscription(
+    user_id: str,
+) -> bool:
+    # Background-safe entitlement check using the same Firestore authority and
+    # strict `isSubscribed is True` rule as the paid-action dependency.
+    normalized = str(user_id or "").strip()
+    if not normalized:
+        return False
+
+    client = await get_firestore_client()
+    snapshot = await document_get(
+        client.collection("users").document(
+            normalized
+        )
+    )
+    if not getattr(snapshot, "exists", False):
+        return False
+
+    return has_active_subscription(
+        snapshot.to_dict() or {}
+    )
