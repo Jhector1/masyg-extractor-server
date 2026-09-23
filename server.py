@@ -259,8 +259,9 @@ async def _startup():
         owner_backfill["registered"],
     )
 
-    # if expire_free_trials / roll_failed_to_trash / purge_expired_trash are async,
-    # AsyncIOScheduler will await them properly
+    # Routine maintenance is independent from high-frequency/external
+    # background pollers. Maintenance must remain available even when an
+    # incident circuit breaker pauses Gmail or bank processing.
     scheduler.add_job(
         expire_free_trials,
         trigger=CronTrigger(hour=0, minute=0),
@@ -291,40 +292,67 @@ async def _startup():
         max_instances=1,
     )
 
-    scheduler.add_job(
-        process_pending_bank_webhooks,
-        trigger=IntervalTrigger(seconds=30),
-        id="bank_webhook_inbox",
-        replace_existing=True,
-        coalesce=True,
-        misfire_grace_time=30,
-        max_instances=1,
+    pause_bank_webhook_poller = (
+        os.getenv(
+            "MASYG_PAUSE_BANK_WEBHOOK_POLLER",
+            "1",
+        ).strip().lower()
+        in {"1", "true", "yes", "on"}
     )
 
-    scheduler.add_job(
-        renew_gmail_watches,
-        trigger=CronTrigger(
-            hour=2,
-            minute=15,
-        ),
-        id="gmail_watch_renewal_daily",
-        replace_existing=True,
-        coalesce=True,
-        misfire_grace_time=3600,
-        max_instances=1,
+    pause_gmail_background_jobs = (
+        os.getenv(
+            "MASYG_PAUSE_GMAIL_BACKGROUND_JOBS",
+            "1",
+        ).strip().lower()
+        in {"1", "true", "yes", "on"}
     )
 
-    from masyg_extractor.integrations.document_sources.gmail.processor import process_pending_gmail_notifications
-
-    scheduler.add_job(
-      process_pending_gmail_notifications,
-      trigger=IntervalTrigger(seconds=60),
-      id="gmail_notification_processor",
-      replace_existing=True,
-      coalesce=True,
-      misfire_grace_time=120,
-      max_instances=1,
+    logger.warning(
+        "Background poller controls "
+        "bank_webhook_paused=%s gmail_background_paused=%s",
+        pause_bank_webhook_poller,
+        pause_gmail_background_jobs,
     )
+
+    if not pause_bank_webhook_poller:
+        scheduler.add_job(
+            process_pending_bank_webhooks,
+            trigger=IntervalTrigger(seconds=30),
+            id="bank_webhook_inbox",
+            replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=30,
+            max_instances=1,
+        )
+
+    if not pause_gmail_background_jobs:
+        scheduler.add_job(
+            renew_gmail_watches,
+            trigger=CronTrigger(
+                hour=2,
+                minute=15,
+            ),
+            id="gmail_watch_renewal_daily",
+            replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=3600,
+            max_instances=1,
+        )
+
+        from masyg_extractor.integrations.document_sources.gmail.processor import (
+            process_pending_gmail_notifications,
+        )
+
+        scheduler.add_job(
+            process_pending_gmail_notifications,
+            trigger=IntervalTrigger(seconds=60),
+            id="gmail_notification_processor",
+            replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=120,
+            max_instances=1,
+        )
 
     scheduler.start()
     inner.state.scheduler = scheduler

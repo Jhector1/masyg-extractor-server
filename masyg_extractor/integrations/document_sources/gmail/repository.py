@@ -516,6 +516,191 @@ class GmailCredentialRepository:
             .document(claim_id)
         )
 
+    def _message_fetch_retry_ref(
+        self,
+        message_id: str,
+    ):
+        return self._import_claim_ref(
+            message_id=message_id,
+            part_key="message-fetch",
+        )
+
+    def message_fetch_retry_state(
+        self,
+        message_id: str,
+    ) -> str:
+        from datetime import datetime, timezone
+
+        ref = self._message_fetch_retry_ref(
+            message_id
+        )
+
+        snapshot = ref.get()
+
+        if not snapshot.exists:
+            return "ready"
+
+        current = snapshot.to_dict() or {}
+        status = str(
+            current.get("status") or ""
+        ).strip()
+
+        if status in {
+            "terminal",
+            "dead_letter",
+        }:
+            return "terminal"
+
+        next_retry_at = current.get(
+            "nextRetryAt"
+        )
+
+        if isinstance(
+            next_retry_at,
+            datetime,
+        ):
+            if next_retry_at.tzinfo is None:
+                next_retry_at = (
+                    next_retry_at.replace(
+                        tzinfo=timezone.utc
+                    )
+                )
+
+            if next_retry_at > datetime.now(
+                timezone.utc
+            ):
+                return "retry_later"
+
+        # A retry record exists, but its backoff
+        # has expired. A successful fetch should
+        # remove the retry record.
+        return "retry_ready"
+
+    def mark_message_fetch_retryable(
+        self,
+        *,
+        message_id: str,
+        error_type: str,
+        error_message: str = "",
+        max_attempts: int = 3,
+        base_backoff_seconds: int = 300,
+        max_backoff_seconds: int = 3600,
+    ) -> str:
+        from datetime import datetime, timedelta, timezone
+
+        from masyg_extractor.integrations.document_sources.gmail.retry_policy import (
+            retry_delay_seconds,
+        )
+
+        normalized_message = str(
+            message_id or ""
+        ).strip()
+
+        if not normalized_message:
+            raise ValueError(
+                "Gmail message retry identity is required"
+            )
+
+        ref = self._message_fetch_retry_ref(
+            normalized_message
+        )
+
+        transaction = self.db.transaction()
+        now = datetime.now(timezone.utc)
+
+        @firestore.transactional
+        def _mark(txn):
+            snapshot = ref.get(
+                transaction=txn
+            )
+
+            current = (
+                snapshot.to_dict() or {}
+                if snapshot.exists
+                else {}
+            )
+
+            attempts = (
+                int(
+                    current.get(
+                        "attemptCount"
+                    )
+                    or 0
+                )
+                + 1
+            )
+
+            common = {
+                "messageId": normalized_message,
+                "partKey": "message-fetch",
+                "filename": "",
+                "attemptCount": attempts,
+                "errorType": str(
+                    error_type or ""
+                ).strip(),
+                "errorMessage": str(
+                    error_message or ""
+                ).strip(),
+                "leaseUntil": None,
+                "failedAt":
+                    firestore.SERVER_TIMESTAMP,
+            }
+
+            if attempts >= max(
+                1,
+                int(max_attempts),
+            ):
+                txn.set(
+                    ref,
+                    {
+                        **common,
+                        "status": "terminal",
+                        "terminalReason":
+                            "message_fetch_retry_exhausted",
+                        "terminalAt":
+                            firestore.SERVER_TIMESTAMP,
+                        "nextRetryAt": None,
+                    },
+                    merge=True,
+                )
+
+                return "terminal"
+
+            delay = retry_delay_seconds(
+                attempts,
+                base_seconds=base_backoff_seconds,
+                max_seconds=max_backoff_seconds,
+            )
+
+            txn.set(
+                ref,
+                {
+                    **common,
+                    "status": "retryable",
+                    "nextRetryAt":
+                        now
+                        + timedelta(
+                            seconds=delay
+                        ),
+                },
+                merge=True,
+            )
+
+            return "retryable"
+
+        return str(
+            _mark(transaction)
+            or "retryable"
+        )
+
+    def clear_message_fetch_retry(
+        self,
+        message_id: str,
+    ) -> None:
+        self._message_fetch_retry_ref(
+            message_id
+        ).delete()
+
     def claim_attachment(
         self,
         *,
@@ -542,18 +727,37 @@ class GmailCredentialRepository:
                 else {}
             )
 
-            if current.get("status") == "processed":
+            status = str(current.get("status") or "").strip()
+
+            if status == "processed":
                 return "processed"
+
+            if status in {"terminal", "dead_letter"}:
+                return "terminal"
 
             lease_until = current.get("leaseUntil")
             if isinstance(lease_until, datetime):
                 if lease_until.tzinfo is None:
-                    lease_until = lease_until.replace(tzinfo=timezone.utc)
+                    lease_until = lease_until.replace(
+                        tzinfo=timezone.utc
+                    )
                 if (
-                    current.get("status") == "processing"
+                    status == "processing"
                     and lease_until > now
                 ):
                     return "busy"
+
+            next_retry_at = current.get("nextRetryAt")
+            if isinstance(next_retry_at, datetime):
+                if next_retry_at.tzinfo is None:
+                    next_retry_at = next_retry_at.replace(
+                        tzinfo=timezone.utc
+                    )
+                if (
+                    status in {"retryable", "failed"}
+                    and next_retry_at > now
+                ):
+                    return "retry_later"
 
             txn.set(
                 ref,
@@ -566,6 +770,7 @@ class GmailCredentialRepository:
                     "leaseUntil": now + timedelta(
                         seconds=max(60, int(lease_seconds))
                     ),
+                    "nextRetryAt": None,
                     "attemptCount": int(
                         current.get("attemptCount") or 0
                     ) + 1,
@@ -685,12 +890,97 @@ class GmailCredentialRepository:
             merge=True,
         )
 
-    def mark_attachment_failed(
+    def mark_attachment_retryable(
         self,
         *,
         message_id: str,
         part_key: str,
         error_type: str,
+        error_message: str = "",
+        stage: str = "",
+        max_attempts: int = 3,
+        base_backoff_seconds: int = 300,
+        max_backoff_seconds: int = 3600,
+    ) -> str:
+        from datetime import datetime, timedelta, timezone
+
+        from masyg_extractor.integrations.document_sources.gmail.retry_policy import (
+            retry_delay_seconds,
+        )
+
+        ref = self._import_claim_ref(
+            message_id=message_id,
+            part_key=part_key,
+        )
+        transaction = self.db.transaction()
+        now = datetime.now(timezone.utc)
+
+        @firestore.transactional
+        def _mark(txn):
+            snapshot = ref.get(transaction=txn)
+            current = (
+                snapshot.to_dict() or {}
+                if snapshot.exists
+                else {}
+            )
+
+            attempts = max(
+                1,
+                int(current.get("attemptCount") or 1),
+            )
+
+            common = {
+                "errorType": str(error_type or "").strip(),
+                "errorMessage": str(error_message or "").strip(),
+                "failureStage": str(stage or "").strip(),
+                "leaseUntil": None,
+                "failedAt": firestore.SERVER_TIMESTAMP,
+            }
+
+            if attempts >= max(1, int(max_attempts)):
+                txn.set(
+                    ref,
+                    {
+                        **common,
+                        "status": "terminal",
+                        "terminalReason": "retry_exhausted",
+                        "terminalAt": firestore.SERVER_TIMESTAMP,
+                        "nextRetryAt": None,
+                    },
+                    merge=True,
+                )
+                return "terminal"
+
+            delay = retry_delay_seconds(
+                attempts,
+                base_seconds=base_backoff_seconds,
+                max_seconds=max_backoff_seconds,
+            )
+
+            txn.set(
+                ref,
+                {
+                    **common,
+                    "status": "retryable",
+                    "nextRetryAt": now + timedelta(
+                        seconds=delay
+                    ),
+                },
+                merge=True,
+            )
+            return "retryable"
+
+        return str(_mark(transaction) or "retryable")
+
+    def mark_attachment_terminal(
+        self,
+        *,
+        message_id: str,
+        part_key: str,
+        error_type: str,
+        error_message: str = "",
+        stage: str = "",
+        terminal_reason: str = "document_rejected",
     ) -> None:
         ref = self._import_claim_ref(
             message_id=message_id,
@@ -698,12 +988,32 @@ class GmailCredentialRepository:
         )
         ref.set(
             {
-                "status": "failed",
+                "status": "terminal",
                 "errorType": str(error_type or "").strip(),
+                "errorMessage": str(error_message or "").strip(),
+                "failureStage": str(stage or "").strip(),
+                "terminalReason": str(
+                    terminal_reason or "document_rejected"
+                ).strip(),
                 "leaseUntil": None,
-                "failedAt": firestore.SERVER_TIMESTAMP,
+                "nextRetryAt": None,
+                "terminalAt": firestore.SERVER_TIMESTAMP,
             },
             merge=True,
+        )
+
+    def mark_attachment_failed(
+        self,
+        *,
+        message_id: str,
+        part_key: str,
+        error_type: str,
+    ) -> None:
+        """Backward-compatible owner for legacy callers."""
+        self.mark_attachment_retryable(
+            message_id=message_id,
+            part_key=part_key,
+            error_type=error_type,
         )
 
     def mark_sync_recovery_required(

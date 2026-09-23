@@ -22,6 +22,9 @@ from masyg_extractor.integrations.document_sources.gmail.service import (
     refresh_gmail_authorization,
 )
 from masyg_extractor.services.document_ingestion import ingest_documents
+from masyg_extractor.integrations.document_sources.gmail.retry_policy import (
+    classify_ingestion_failure,
+)
 from masyg_extractor.services.my_log import logger
 from masyg_extractor.services.progress_log import ExtractorProgressLog
 from masyg_extractor.services.subscription_access import (
@@ -85,6 +88,38 @@ async def _part_bytes(
             attachment_id=attachment_id,
         )
     return decode_gmail_body_data(str(body.get("data") or ""))
+
+
+async def _publish_import_failure_notification(
+    *,
+    user_id: str,
+    message_id: str,
+    filename: str,
+) -> None:
+    try:
+        await publish_user_notification(
+            user_id=user_id,
+            type="document.import_failed",
+            source="gmail",
+            severity="warning",
+            title="Gmail import needs attention",
+            message=f"{filename} could not be imported from Gmail.",
+            entity={
+                "type": "gmail-message",
+                "id": message_id,
+            },
+            dedupe_key=(
+                "gmail:document.import_failed:"
+                f"{message_id}:{filename.lower()}"
+            ),
+        )
+    except Exception as notification_exc:
+        logger.warning(
+            "Gmail failure notification failed "
+            "user_id=%s error_type=%s",
+            user_id,
+            type(notification_exc).__name__,
+        )
 
 
 async def process_gmail_notifications_for_user(user_id: str) -> dict:
@@ -172,23 +207,66 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
 
         imported = 0
         supported = 0
-        failures = 0
+        retryable_failures = 0
+        terminal_failures = 0
 
         for message_id in message_ids:
+            message_retry_state = await asyncio.to_thread(
+                repository.message_fetch_retry_state,
+                message_id,
+            )
+
+            if message_retry_state == "terminal":
+                terminal_failures += 1
+
+                logger.warning(
+                    "Gmail message fetch permanently skipped "
+                    "user_id=%s message_id=%s",
+                    normalized_user,
+                    message_id,
+                )
+
+                continue
+
+            if message_retry_state == "retry_later":
+                retryable_failures += 1
+                continue
+
             try:
                 message = await get_gmail_message(
                     access_token,
                     message_id,
                 )
             except Exception as exc:
-                failures += 1
+                failure_outcome = await asyncio.to_thread(
+                    repository.mark_message_fetch_retryable,
+                    message_id=message_id,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+
+                if failure_outcome == "terminal":
+                    terminal_failures += 1
+                else:
+                    retryable_failures += 1
+
                 logger.warning(
                     "Gmail message fetch failed "
-                    "user_id=%s error_type=%s",
+                    "user_id=%s message_id=%s "
+                    "error_type=%s outcome=%s",
                     normalized_user,
+                    message_id,
                     type(exc).__name__,
+                    failure_outcome,
                 )
+
                 continue
+
+            if message_retry_state == "retry_ready":
+                await asyncio.to_thread(
+                    repository.clear_message_fetch_retry,
+                    message_id,
+                )
 
             payload = message.get("payload") or {}
             supported_parts = [
@@ -226,8 +304,17 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                 )
                 if claim == "processed":
                     continue
+
+                if claim == "terminal":
+                    terminal_failures += 1
+                    continue
+
+                if claim in {"busy", "retry_later"}:
+                    retryable_failures += 1
+                    continue
+
                 if claim != "claimed":
-                    failures += 1
+                    retryable_failures += 1
                     continue
 
                 try:
@@ -302,9 +389,54 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                         group_id=group_id,
                     )
                     if result.get("error"):
-                        raise RuntimeError(
-                            "Canonical document ingestion failed"
+                        (
+                            failure_class,
+                            failure_message,
+                            failure_stage,
+                        ) = classify_ingestion_failure(result)
+
+                        if failure_class == "terminal":
+                            await asyncio.to_thread(
+                                repository.mark_attachment_terminal,
+                                message_id=message_id,
+                                part_key=part_key,
+                                error_type="IngestionRejected",
+                                error_message=failure_message,
+                                stage=failure_stage,
+                                terminal_reason="document_rejected",
+                            )
+                            terminal_failures += 1
+                            failure_outcome = "terminal"
+                        else:
+                            failure_outcome = await asyncio.to_thread(
+                                repository.mark_attachment_retryable,
+                                message_id=message_id,
+                                part_key=part_key,
+                                error_type="IngestionFailure",
+                                error_message=failure_message,
+                                stage=failure_stage,
+                            )
+
+                            if failure_outcome == "terminal":
+                                terminal_failures += 1
+                            else:
+                                retryable_failures += 1
+
+                        logger.warning(
+                            "Gmail attachment ingestion failed "
+                            "user_id=%s outcome=%s stage=%s",
+                            normalized_user,
+                            failure_outcome,
+                            failure_stage or "unknown",
                         )
+
+                        await _publish_import_failure_notification(
+                            user_id=normalized_user,
+                            message_id=message_id,
+                            filename=filename,
+                        )
+
+                        continue
 
                     await asyncio.to_thread(
                         repository.mark_attachment_processed,
@@ -335,56 +467,50 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                             type(notification_exc).__name__,
                         )
                 except Exception as exc:
-                    failures += 1
-                    await asyncio.to_thread(
-                        repository.mark_attachment_failed,
+                    failure_outcome = await asyncio.to_thread(
+                        repository.mark_attachment_retryable,
                         message_id=message_id,
                         part_key=part_key,
                         error_type=type(exc).__name__,
+                        error_message=str(exc),
+                        stage="gmail_import",
                     )
+
+                    if failure_outcome == "terminal":
+                        terminal_failures += 1
+                    else:
+                        retryable_failures += 1
+
                     logger.warning(
                         "Gmail attachment import failed "
-                        "user_id=%s error_type=%s",
+                        "user_id=%s error_type=%s outcome=%s",
                         normalized_user,
                         type(exc).__name__,
+                        failure_outcome,
                     )
-                    try:
-                        await publish_user_notification(
-                            user_id=normalized_user,
-                            type="document.import_failed",
-                            source="gmail",
-                            severity="warning",
-                            title="Gmail import needs attention",
-                            message=f"{filename} could not be imported from Gmail.",
-                            entity={
-                                "type": "gmail-message",
-                                "id": message_id,
-                            },
-                            dedupe_key=(
-                                "gmail:document.import_failed:"
-                                f"{message_id}:{filename.lower()}"
-                            ),
-                        )
-                    except Exception as notification_exc:
-                        logger.warning(
-                            "Gmail failure notification failed "
-                            "user_id=%s error_type=%s",
-                            normalized_user,
-                            type(notification_exc).__name__,
-                        )
 
-        if failures:
+                    await _publish_import_failure_notification(
+                        user_id=normalized_user,
+                        message_id=message_id,
+                        filename=filename,
+                    )
+
+        if retryable_failures:
             logger.warning(
                 "Gmail automatic import incomplete "
-                "user_id=%s imported=%s failures=%s",
+                "user_id=%s imported=%s retryable_failures=%s "
+                "terminal_failures=%s",
                 normalized_user,
                 imported,
-                failures,
+                retryable_failures,
+                terminal_failures,
             )
+
             return {
                 "status": "partial",
                 "imported": imported,
-                "failures": failures,
+                "failures": retryable_failures,
+                "terminal_failures": terminal_failures,
                 "supported": supported,
             }
 
@@ -405,15 +531,17 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
 
         logger.info(
             "Gmail automatic import complete "
-            "user_id=%s imported=%s history_id=%s",
+            "user_id=%s imported=%s terminal_failures=%s history_id=%s",
             normalized_user,
             imported,
+            terminal_failures,
             final_history_id,
         )
         return {
             "status": "processed",
             "imported": imported,
             "supported": supported,
+            "terminal_failures": terminal_failures,
             "history_id": final_history_id,
         }
     finally:

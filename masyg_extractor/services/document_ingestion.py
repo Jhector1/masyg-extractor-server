@@ -120,6 +120,7 @@ async def ingest_documents(
     results: dict[int, Any] = {}
     files_metadata: list[dict[str, str]] = []
     failed_files_ids: list[str] = []
+    failure_details: list[dict[str, str]] = []
     failed = 0
 
     for start_index in range(0, total_files, chunk_size):
@@ -144,14 +145,24 @@ async def ingest_documents(
 
             if not result:
                 failed += 1
+                error_message = "Pipeline returned no result"
+                failure_stage = "pipeline"
                 failed_id = await record_failed_file(
                     normalized_user_id,
                     group_id,
                     filename,
-                    "Pipeline returned no result",
-                    stage="pipeline",
+                    error_message,
+                    stage=failure_stage,
                 )
                 failed_files_ids.append(failed_id)
+                failure_details.append(
+                    {
+                        "filename": filename,
+                        "file_id": failed_id,
+                        "error": error_message,
+                        "stage": failure_stage,
+                    }
+                )
                 asyncio.create_task(
                     send_log(f"❌ {filename} failed to process.", user_room=room)
                 )
@@ -160,17 +171,31 @@ async def ingest_documents(
             parsed = result.get("parsed_content")
             if isinstance(parsed, dict) and "error" in parsed:
                 failed += 1
+                error_message = str(
+                    parsed.get("error") or "Unknown error"
+                ).strip()
+                failure_stage = str(
+                    parsed.get("stage") or "parsing"
+                ).strip()
                 failed_id = await record_failed_file(
                     normalized_user_id,
                     group_id,
                     filename,
-                    parsed.get("error", "Unknown error"),
-                    stage=parsed.get("stage") or "parsing",
+                    error_message,
+                    stage=failure_stage,
                 )
                 failed_files_ids.append(failed_id)
+                failure_details.append(
+                    {
+                        "filename": filename,
+                        "file_id": failed_id,
+                        "error": error_message,
+                        "stage": failure_stage,
+                    }
+                )
                 asyncio.create_task(
                     send_log(
-                        f'❌ {filename} failed: {parsed.get("error", "Unknown error")}. '
+                        f"❌ {filename} failed: {error_message}. "
                         "Please submit a valid invoice, bill, or receipt.",
                         user_room=room,
                     )
@@ -231,7 +256,12 @@ async def ingest_documents(
             {"progress": 100, "file_id": None},
             room=room,
         )
-        return {"error": "❌ Files Processing Failed"}
+        return {
+            "error": "❌ Files Processing Failed",
+            "group_id": group_id,
+            "metadata": fail_meta,
+            "failures": failure_details,
+        }
 
     metadata: dict[str, Any] = {
         "upload_time": datetime.now().isoformat(),
@@ -255,6 +285,8 @@ async def ingest_documents(
         group_obj[item["sanitized_filename"]] = item["parsed_content"]
     group_obj["group_id"] = group_id
     group_obj["metadata"] = metadata
+    if failure_details:
+        group_obj["failures"] = failure_details
 
     await sio.emit(
         EVENT_PROGRESS,

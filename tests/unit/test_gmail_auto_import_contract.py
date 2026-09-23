@@ -69,14 +69,21 @@ def test_attachment_claim_precedes_ingestion_and_cursor_advances_after_success()
     assert claim < reconcile < ingest < processed < advance
 
 
-def test_processor_does_not_advance_cursor_on_partial_failure():
+def test_processor_only_blocks_cursor_for_retryable_failure():
     processor = read(
         "masyg_extractor/integrations/document_sources/gmail/processor.py"
     )
-    partial = processor.index("if failures:")
-    advance = processor.index("repository.advance_history_id")
+
+    partial = processor.index("if retryable_failures:")
+    advance = processor.index(
+        "repository.advance_history_id"
+    )
+
     assert partial < advance
     assert '"status": "partial"' in processor
+    assert "terminal_failures" in processor
+    assert "repository.mark_attachment_terminal" in processor
+    assert "repository.mark_attachment_retryable" in processor
 
 
 def test_history_expiry_fails_closed_for_recovery():
