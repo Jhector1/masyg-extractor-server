@@ -22,6 +22,9 @@ from masyg_extractor.integrations.document_sources.gmail.service import (
     refresh_gmail_authorization,
 )
 from masyg_extractor.services.document_ingestion import ingest_documents
+from masyg_extractor.services.document_ingestion import (
+    persist_failed_ingestion_artifact,
+)
 from masyg_extractor.integrations.document_sources.gmail.retry_policy import (
     classify_ingestion_failure,
 )
@@ -387,6 +390,7 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                         client_id=f"gmail:{normalized_user}",
                         progress_logger=progress_logger,
                         group_id=group_id,
+                        persist_failure_artifacts=False,
                     )
                     if result.get("error"):
                         (
@@ -396,6 +400,14 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                         ) = classify_ingestion_failure(result)
 
                         if failure_class == "terminal":
+                            await persist_failed_ingestion_artifact(
+                                user_id=normalized_user,
+                                group_id=group_id,
+                                filename=filename,
+                                error_message=failure_message,
+                                stage=failure_stage,
+                            )
+
                             await asyncio.to_thread(
                                 repository.mark_attachment_terminal,
                                 message_id=message_id,
@@ -418,6 +430,13 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                             )
 
                             if failure_outcome == "terminal":
+                                await persist_failed_ingestion_artifact(
+                                    user_id=normalized_user,
+                                    group_id=group_id,
+                                    filename=filename,
+                                    error_message=failure_message,
+                                    stage=failure_stage,
+                                )
                                 terminal_failures += 1
                             else:
                                 retryable_failures += 1
@@ -477,6 +496,13 @@ async def process_gmail_notifications_for_user(user_id: str) -> dict:
                     )
 
                     if failure_outcome == "terminal":
+                        await persist_failed_ingestion_artifact(
+                            user_id=normalized_user,
+                            group_id=group_id,
+                            filename=filename,
+                            error_message=str(exc),
+                            stage="gmail_import",
+                        )
                         terminal_failures += 1
                     else:
                         retryable_failures += 1

@@ -96,6 +96,62 @@ def _filename(upload: ReadableUpload, index: int) -> str:
     return value or f"document-{index + 1}"
 
 
+async def persist_failed_ingestion_artifact(
+    *,
+    user_id: str,
+    group_id: str,
+    filename: str,
+    error_message: str,
+    stage: str | None = None,
+    file_id: str = "terminal-failure",
+) -> str:
+    """Persist one idempotent user-visible terminal ingestion failure."""
+
+    normalized_user_id = str(user_id or "").strip()
+    normalized_group_id = str(group_id or "").strip()
+
+    if not normalized_user_id:
+        raise ValueError("user_id is required")
+
+    if not normalized_group_id:
+        raise ValueError("group_id is required")
+
+    failed_id = await record_failed_file(
+        normalized_user_id,
+        normalized_group_id,
+        filename,
+        error_message,
+        stage=stage,
+        file_id=file_id,
+    )
+
+    firestore_client = firestore.client()
+    group_doc_ref = (
+        firestore_client.collection("users")
+        .document(normalized_user_id)
+        .collection("groups")
+        .document(normalized_group_id)
+    )
+
+    fail_meta = {
+        "status": "failed",
+        "upload_time": datetime.now().isoformat(),
+        "file_count": 0,
+        "group_name": normalized_group_id,
+        "isViewed": False,
+        "failed_count": 1,
+        "failed_files": [failed_id],
+    }
+
+    await document_set(
+        group_doc_ref,
+        {"metadata": fail_meta},
+        merge=True,
+    )
+
+    return failed_id
+
+
 async def ingest_documents(
     *,
     files: Sequence[ReadableUpload],
@@ -103,6 +159,7 @@ async def ingest_documents(
     client_id: str,
     progress_logger: ExtractorProgressLog,
     group_id: str | None = None,
+    persist_failure_artifacts: bool = True,
 ) -> dict[str, Any]:
     normalized_user_id = str(user_id or "").strip()
     if not normalized_user_id:
@@ -122,6 +179,22 @@ async def ingest_documents(
     failed_files_ids: list[str] = []
     failure_details: list[dict[str, str]] = []
     failed = 0
+
+    async def _record_failure(
+        filename: str,
+        error_message: str,
+        failure_stage: str,
+    ) -> str:
+        if not persist_failure_artifacts:
+            return ""
+
+        return await record_failed_file(
+            normalized_user_id,
+            group_id,
+            filename,
+            error_message,
+            stage=failure_stage,
+        )
 
     for start_index in range(0, total_files, chunk_size):
         chunk_files = files[start_index : start_index + chunk_size]
@@ -147,14 +220,14 @@ async def ingest_documents(
                 failed += 1
                 error_message = "Pipeline returned no result"
                 failure_stage = "pipeline"
-                failed_id = await record_failed_file(
-                    normalized_user_id,
-                    group_id,
+                failed_id = await _record_failure(
                     filename,
                     error_message,
-                    stage=failure_stage,
+                    failure_stage,
                 )
-                failed_files_ids.append(failed_id)
+                if failed_id:
+                    failed_files_ids.append(failed_id)
+
                 failure_details.append(
                     {
                         "filename": filename,
@@ -177,14 +250,14 @@ async def ingest_documents(
                 failure_stage = str(
                     parsed.get("stage") or "parsing"
                 ).strip()
-                failed_id = await record_failed_file(
-                    normalized_user_id,
-                    group_id,
+                failed_id = await _record_failure(
                     filename,
                     error_message,
-                    stage=failure_stage,
+                    failure_stage,
                 )
-                failed_files_ids.append(failed_id)
+                if failed_id:
+                    failed_files_ids.append(failed_id)
+
                 failure_details.append(
                     {
                         "filename": filename,
@@ -250,7 +323,13 @@ async def ingest_documents(
             "failed_count": failed,
             "failed_files": failed_files_ids,
         }
-        await document_set(group_doc_ref, {"metadata": fail_meta}, merge=True)
+        if persist_failure_artifacts:
+            await document_set(
+                group_doc_ref,
+                {"metadata": fail_meta},
+                merge=True,
+            )
+
         await sio.emit(
             EVENT_PROGRESS,
             {"progress": 100, "file_id": None},

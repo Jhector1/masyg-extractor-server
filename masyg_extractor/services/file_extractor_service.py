@@ -430,11 +430,15 @@ async def record_failed_file(
     error_message: str,
     *,
     stage: str | None = None,
+    file_id: str | None = None,
 ) -> str:
     """Creates/merges a file doc with status=failed so UI can show it."""
     from masyg_extractor.utils.filename_utils import sanitize_generate_unique_filename
     client = await get_firestore_client()
-    file_id = sanitize_generate_unique_filename(filename)
+    file_id = (
+        str(file_id or "").strip()
+        or sanitize_generate_unique_filename(filename)
+    )
 
     fref = (
         client.collection("users")
