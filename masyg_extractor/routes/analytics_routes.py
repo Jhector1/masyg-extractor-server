@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
 from masyg_extractor.config.jwt_config import get_current_user_from_cookie
@@ -10,20 +10,23 @@ from masyg_extractor.services.firestore_helpers import get_firestore_client
 
 router = APIRouter()
 CACHE_TTL_SECONDS = 300
+CACHE_SCHEMA_VERSION = 2
 
 
 @router.get("/dashboard/analytics")
 async def get_dashboard_analytics(
     current_user: dict = Depends(get_current_user_from_cookie),
+    refresh: bool = Query(False),
 ):
     user_id = current_user.get("userId")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID not found")
 
-    cache_key = f"dashboard:analytics:{user_id}"
-    cached_data = await analytics_cache.get_json(cache_key)
-    if cached_data is not None:
-        return JSONResponse(content=cached_data, status_code=200)
+    cache_key = f"dashboard:analytics:v{CACHE_SCHEMA_VERSION}:{user_id}"
+    if not refresh:
+        cached_data = await analytics_cache.get_json(cache_key)
+        if cached_data is not None:
+            return JSONResponse(content=cached_data, status_code=200)
 
     firestore_client = await get_firestore_client()
     groups_ref = firestore_client.collection("users").document(user_id).collection("groups")

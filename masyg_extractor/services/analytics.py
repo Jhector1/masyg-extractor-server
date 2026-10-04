@@ -52,24 +52,28 @@ def aggregate_group_files(groups: Iterable[tuple[Mapping[str, Any], Iterable[Map
     total_spending_by_month: dict[str, float] = {}
     top_vendors: dict[str, int] = {}
     category_breakdown: dict[str, float] = {}
-    total_files = 0
-    successful_files = 0
-
     for group_data, files in groups:
         metadata = (group_data or {}).get("metadata") or {}
-        month_key = month_from_metadata(metadata)
-        file_list = list(files)
+        if bool(metadata.get("trashed", False)):
+            continue
 
-        # Persisted file documents are authoritative. Metadata file lists can be
-        # stale after trash/purge/restore operations.
+        month_key = month_from_metadata(metadata)
+        file_list = [
+            (file_data or {})
+            for file_data in files
+            if not bool((file_data or {}).get("trashed", False))
+        ]
+
+        # Persisted, non-trashed file documents are authoritative. Metadata file
+        # lists can be stale after trash/purge/restore operations. Document volume
+        # intentionally includes both successful and failed active uploads so it
+        # matches the dashboard's Total documents population.
         monthly_uploads[month_key] = monthly_uploads.get(month_key, 0) + len(file_list)
 
         for file_data in file_list:
-            file_data = file_data or {}
-            total_files += 1
-            if file_data.get("error"):
+            current_status = str(file_data.get("status") or "ok").strip().lower()
+            if current_status == "failed" or file_data.get("error"):
                 continue
-            successful_files += 1
 
             # Current extractor schema owns vendor_name. Keep vendor as a legacy
             # fallback for older persisted documents.
@@ -97,12 +101,9 @@ def aggregate_group_files(groups: Iterable[tuple[Mapping[str, Any], Iterable[Map
                 2,
             )
 
-    extraction_accuracy = (successful_files / total_files * 100.0) if total_files else 0.0
-
     return {
         "monthly_uploads": monthly_uploads,
         "total_spending_by_month": total_spending_by_month,
         "top_vendors": sorted(top_vendors.items(), key=lambda item: item[1], reverse=True),
-        "extraction_accuracy": extraction_accuracy,
         "category_breakdown": category_breakdown,
     }
