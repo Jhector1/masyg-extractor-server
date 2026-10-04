@@ -49,6 +49,12 @@ from masyg_extractor.services.progress_log import (
 )
 from masyg_extractor.services.dependencies import generate_group_id
 from masyg_extractor.services.my_log import send_log, logger
+from masyg_extractor.services.trash_retention import (
+    purge_expired_trash_for_user,
+    to_utc_datetime,
+    trash_expiry,
+    utc_now,
+)
 from masyg_extractor.utils.extensions import sio
 
 router = APIRouter(prefix="/extractor")
@@ -585,25 +591,6 @@ async def update_view_status(
 from datetime import datetime, timedelta
 from fastapi import Path
 
-TRASH_TTL_DAYS = 30
-
-
-def _now_ts():
-    return datetime.utcnow()
-
-
-def _ttl_ts(days: int = TRASH_TTL_DAYS):
-    return _now_ts() + timedelta(days=days)
-
-
-def _now_utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _ttl_utc_iso(days: int = TRASH_TTL_DAYS) -> str:
-    return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -655,8 +642,8 @@ async def trash_group(
     gsnap = await _assert_exists(gref, f"No group found: {group_id}")
 
     # in trash_group / trash_file:
-    now = _now_utc_iso()
-    exp = _ttl_utc_iso()
+    now = utc_now()
+    exp = trash_expiry()
 
     # mark group trashed
     await document_update(gref, {
@@ -677,7 +664,7 @@ async def trash_group(
             "trashExpiresAt": exp,
         })
 
-    return {"message": f"Group {group_id} moved to Trash until {exp.format()}."}
+    return {"message": f"Group {group_id} moved to Trash until {exp.isoformat()}."}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -704,8 +691,8 @@ async def trash_file(
     fref = _file_ref(client, user_id, group_id, file_name)
     await _assert_exists(fref, "File not found")
 
-    now = _now_ts()
-    exp = _ttl_ts()
+    now = utc_now()
+    exp = trash_expiry()
 
     await document_update(fref, {
         "trashed": True,
@@ -882,34 +869,7 @@ from typing import Optional, Any, Dict, List
 
 # ── time helpers ──────────────────────────────────────────────────────────────
 def _to_utc_aware(dt_like: Optional[object]) -> Optional[datetime]:
-    """Accept Firestore Timestamp, datetime, or ISO string. Return UTC-aware datetime."""
-    if dt_like is None:
-        return None
-    if hasattr(dt_like, "to_datetime"):  # Firestore Timestamp
-        try:
-            d = dt_like.to_datetime()
-            if d.tzinfo is None:
-                d = d.replace(tzinfo=timezone.utc)
-            return d.astimezone(timezone.utc)
-        except Exception:
-            return None
-    if isinstance(dt_like, datetime):
-        d = dt_like
-        if d.tzinfo is None:
-            d = d.replace(tzinfo=timezone.utc)
-        return d.astimezone(timezone.utc)
-    if isinstance(dt_like, str):
-        s = dt_like.strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        try:
-            d = datetime.fromisoformat(s)
-            if d.tzinfo is None:
-                d = d.replace(tzinfo=timezone.utc)
-            return d.astimezone(timezone.utc)
-        except Exception:
-            return None
-    return None
+    return to_utc_datetime(dt_like)
 
 
 def _days_left(expiry_like: Optional[object]) -> Optional[int]:
@@ -941,6 +901,13 @@ async def list_trash(current_user: dict = Depends(get_current_user_from_cookie))
     client = await get_firestore_client()
     user_ref = client.collection("users").document(user_id)
     groups_ref = user_ref.collection("groups")
+
+    # Catch up missed scheduler runs and legacy ISO-string expiries before listing.
+    # Failure here must not make Trash unavailable; the scheduled purge can retry.
+    try:
+        await purge_expired_trash_for_user(user_id, client=client)
+    except Exception:
+        logger.exception("Trash catch-up purge failed for user=%s", user_id)
 
     payload_by_gid: Dict[str, Any] = {}
 
@@ -1090,17 +1057,6 @@ class BulkResponse(BaseModel):
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 BATCH_LIMIT = 450  # stay safely under Firestore’s 500 write limit
-RETENTION_DAYS = 30
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _trash_expiry() -> datetime:
-    return _utcnow() + timedelta(days=RETENTION_DAYS)
-
-
 def _chunks[T](seq: List[T], size: int) -> List[List[T]]:
     return [seq[i:i + size] for i in range(0, len(seq), size)]
 
@@ -1192,16 +1148,6 @@ async def _delete_group_tree(client: firestore.Client, user_id: str, gid: str) -
 #
 # router = APIRouter(prefix="/extractor")
 
-TRASH_TTL_DAYS = 30
-
-
-def _utc_now():
-    return datetime.now(timezone.utc)
-
-
-# def _trash_expiry():
-#     return _utc_now() + timedelta(days=TRASH_TTL_DAYS)
-
 @router.post("/trash/bulk")
 async def bulk_trash(
         request: Request,
@@ -1238,8 +1184,8 @@ async def bulk_trash(
                 results["groups"].append({"groupId": gid, "status": "error", "error": "not_found"})
                 continue
 
-            now = _utc_now().isoformat()
-            exp = _trash_expiry().isoformat()
+            now = utc_now()
+            exp = trash_expiry()
             await document_update(gref, {
                 "metadata.trashed": True,
                 "metadata.trashAt": now,
@@ -1274,8 +1220,8 @@ async def bulk_trash(
                 results["files"].append({"groupId": gid, "fileId": fid, "status": "error", "error": "not_found"})
                 continue
             # integrations_ref
-            now = _utc_now().isoformat()
-            exp = _trash_expiry().isoformat()
+            now = utc_now()
+            exp = trash_expiry()
             await document_update(fref, {
                 "trashed": True,
                 "trashAt": now,

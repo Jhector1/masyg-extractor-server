@@ -6,21 +6,21 @@ from google.api_core.exceptions import FailedPrecondition
 from google.cloud.firestore_v1 import FieldFilter
 from firebase_admin import firestore as admin_fs, firestore
 
-from masyg_extractor.services.firestore_helpers import get_firestore_client, document_delete
+from masyg_extractor.services.firestore_helpers import get_firestore_client
 from masyg_extractor.services.my_log import logger
+from masyg_extractor.services.trash_retention import (
+    TRASH_TTL_DAYS,
+    purge_expired_trash_globally,
+    trash_expiry,
+    utc_now,
+)
 from masyg_extractor.services.subscription_services import _recompute_is_subscribed
 
-TRASH_TTL_DAYS = 30
 db = firestore.client()
-def _utc_now():
-    return datetime.now(timezone.utc)
-
-def _in_days(d: int):
-    return _utc_now() + timedelta(days=d)
 
 async def roll_failed_to_trash():
     client = await get_firestore_client()
-    now = _utc_now()
+    now = utc_now()
 
     try:
         q = (
@@ -43,8 +43,8 @@ async def roll_failed_to_trash():
         batch.update(d.reference, {
             "trashed": True,
             "trash_reason": "auto_failed_rollover",
-            "trashAt": _utc_now(),
-            "trashExpiresAt": _in_days(TRASH_TTL_DAYS),
+            "trashAt": utc_now(),
+            "trashExpiresAt": trash_expiry(TRASH_TTL_DAYS),
         })
         moved += 1
 
@@ -55,34 +55,14 @@ async def roll_failed_to_trash():
     return {"moved": moved}
 
 async def purge_expired_trash():
-    client = await get_firestore_client()
-    now = _utc_now()
-
-    try:
-        q = (
-            client.collection_group("files")
-            .where(filter=FieldFilter("trashed", "==", True))
-            .where(filter=FieldFilter("trashExpiresAt", "<=", now))
-            .order_by("trashExpiresAt")
-            .limit(500)
-        )
-        docs = await asyncio.to_thread(lambda: list(q.stream()))
-    except FailedPrecondition as e:
-        logger.warning("Missing index (create link in error): %s", e)
-        return {"purged": 0}
-
-    to_delete = [d.reference for d in docs]
-
-    purged = 0
-    for i in range(0, len(to_delete), 450):
-        batch = client.batch()
-        for ref in to_delete[i:i+450]:
-            batch.delete(ref)
-            purged += 1
-        await asyncio.to_thread(batch.commit)
-
-    logger.info(f"purge_expired_trash: purged={purged}")
-    return {"purged": purged}
+    result = await purge_expired_trash_globally()
+    logger.info(
+        "purge_expired_trash: purged=%s groups=%s files=%s",
+        result["purged"],
+        result["groups"],
+        result["files"],
+    )
+    return result
 
 TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "30"))
 
